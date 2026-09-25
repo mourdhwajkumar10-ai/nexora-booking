@@ -1,0 +1,132 @@
+@import 'tailwindcss';
+
+/*
+ * Nexora design tokens — Vercel/Geist-inspired light theme.
+ * Neutral gray scale, 1px hairline borders, restrained shadows, one blue accent,
+ * semantic status colours for the floor (green / amber / blue / yellow / slate).
+ */
+:root {
+  --background: #ffffff;
+  --background-2: #fafafa;
+  --gray-100: #f2f2f2;
+  --gray-200: #ebebeb;
+  --gray-300: #e6e6e6;
+  --gray-400: #eaeaea;
+  --gray-500: #c9c9c9;
+  --gray-600: #a8a8a8;
+  --gray-700: #8f8f8f;
+  --gray-800: #7d7d7d;
+  --gray-900: #666666;
+  --gray-1000: #171717;
+  --border: #eaeaea;
+  --border-strong: #d4d4d4;
+
+  --accent: #0070f3;
+  --accent-hover: #0060d1;
+  --accent-soft: #eef5ff;
+
+  --success: #16a34a;
+  --success-soft: #edfbf1;
+  --success-fg: #106b31;
+  --amber: #f59e0b;
+  --amber-soft: #fff7e6;
+  --amber-fg: #9a5b00;
+  --blue: #0070f3;
+  --blue-soft: #eef5ff;
+  --blue-fg: #0050b0;
+  --yellow: #eab308;
+  --yellow-soft: #fefbe8;
+  --yellow-fg: #7a5d00;
+  --slate: #64748b;
+  --slate-soft: #f1f5f9;
+  --slate-fg: #475569;
+  --red: #e5484d;
+  --red-soft: #fff0f0;
+  --red-fg: #b4232a;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04);
+  --shadow-md: 0 2px 4px rgba(0, 0, 0, 0.04), 0 8px 16px -4px rgba(0, 0, 0, 0.06);
+  --shadow-lg: 0 4px 8px rgba(0, 0, 0, 0.04), 0 24px 48px -12px rgba(0, 0, 0, 0.12);
+  --radius: 8px;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-background-2: var(--background-2);
+  --color-gray-100: var(--gray-100);
+  --color-gray-200: var(--gray-200);
+  --color-gray-300: var(--gray-300);
+  --color-gray-400: var(--gray-400);
+  --color-gray-500: var(--gray-500);
+  --color-gray-600: var(--gray-600);
+  --color-gray-700: var(--gray-700);
+  --color-gray-800: var(--gray-800);
+  --color-gray-900: var(--gray-900);
+  --color-gray-1000: var(--gray-1000);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-soft: var(--accent-soft);
+  --color-success: var(--success);
+  --color-success-soft: var(--success-soft);
+  --color-success-fg: var(--success-fg);
+  --color-amber: var(--amber);
+  --color-amber-soft: var(--amber-soft);
+  --color-amber-fg: var(--amber-fg);
+  --color-blue: var(--blue);
+  --color-blue-soft: var(--blue-soft);
+  --color-blue-fg: var(--blue-fg);
+  --color-yellow: var(--yellow);
+  --color-yellow-soft: var(--yellow-soft);
+  --color-yellow-fg: var(--yellow-fg);
+  --color-slate: var(--slate);
+  --color-slate-soft: var(--slate-soft);
+  --color-slate-fg: var(--slate-fg);
+  --color-red: var(--red);
+  --color-red-soft: var(--red-soft);
+  --color-red-fg: var(--red-fg);
+  --shadow-sm: var(--shadow-sm);
+  --shadow-md: var(--shadow-md);
+  --shadow-lg: var(--shadow-lg);
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, SFMono-Regular, monospace;
+  --animate-alert-pulse: alert-pulse 1.4s ease-in-out infinite;
+  --animate-fade-in: fade-in 160ms ease-out;
+}
+
+@keyframes alert-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: none; }
+}
+
+html {
+  color-scheme: light;
+  -webkit-text-size-adjust: 100%;
+}
+body {
+  background: var(--background);
+  color: var(--gray-1000);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+::selection { background: var(--accent-soft); }
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.tabular { font-variant-numeric: tabular-nums; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

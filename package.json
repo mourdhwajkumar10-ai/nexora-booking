@@ -1,0 +1,20 @@
+{
+  "name": "nexora",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Nexora — dual-sided restaurant reservation & floor operations platform",
+  "workspaces": ["packages/*", "apps/*"],
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "dev": "npm run dev -w @nexora/api & npm run dev -w @nexora/web & wait",
+    "dev:api": "npm run dev -w @nexora/api",
+    "dev:web": "npm run dev -w @nexora/web",
+    "build": "npm run build -w @nexora/web",
+    "db:create": "npm run db:create -w @nexora/api",
+    "db:migrate": "npm run db:migrate -w @nexora/api",
+    "db:reset": "npm run db:reset -w @nexora/api",
+    "seed": "npm run seed -w @nexora/api",
+    "test": "npm run test -w @nexora/shared && npm run test -w @nexora/api",
+    "typecheck": "npm run typecheck --workspaces --if-present"
+  }
+}

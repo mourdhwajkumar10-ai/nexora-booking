@@ -1,0 +1,13 @@
+node_modules/
+.next/
+dist/
+coverage/
+*.log
+.env
+.env.local
+.DS_Store
+playwright-report/
+test-results/
+*.tsbuildinfo
+next-env.d.ts
+/Restaurant*.pdf
