@@ -60,6 +60,9 @@ export async function buildApp(opts: { logger?: boolean } = {}): Promise<Fastify
     if (err?.code === '23P01') {
       return reply.status(409).send({ error: { code: 'SLOT_UNAVAILABLE', message: 'That table is no longer available for this time', details: { alternatives: [] } } });
     }
+    if (err?.code === '22P02') {
+      return reply.status(400).send({ error: { code: 'INVALID_ID', message: 'Malformed identifier' } });
+    }
     if (err?.code === '23505') {
       return reply.status(409).send({ error: { code: 'DUPLICATE', message: 'A record with these details already exists', details: { constraint: err.constraint } } });
     }

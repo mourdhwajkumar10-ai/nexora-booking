@@ -60,3 +60,6 @@ export const guestDisplayName = (g: { first_name: string; last_name: string }) =
 export function maskPhone(phone: string): string {
   return `${'•'.repeat(Math.max(0, phone.length - 4))}${phone.slice(-4)}`;
 }
+
+/** Anonymous walk-ins get a synthetic `walkin:<id>` phone; never message or list them as real contacts. */
+export const isSyntheticPhone = (phone: string) => phone.startsWith('walkin:');

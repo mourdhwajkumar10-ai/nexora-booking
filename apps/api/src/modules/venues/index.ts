@@ -1,7 +1,8 @@
 import type { NexoraModule } from '../types';
+import { venueRoutes } from './routes';
 
-// TODO(wave-A): implement. See docs/BACKLOG.md for this module's stories.
+/** Venue administration & inventory (Epic E1): directory, settings, shifts, tables, menu, audit. */
 export const venuesModule: NexoraModule = {
   name: 'venues',
-  routes: async (_app) => {},
+  routes: venueRoutes,
 };

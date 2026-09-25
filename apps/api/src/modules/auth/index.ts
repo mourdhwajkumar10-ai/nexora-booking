@@ -20,7 +20,7 @@ async function venuesFor(user: StaffUser): Promise<MeResponse['venues']> {
 export const authModule: NexoraModule = {
   name: 'auth',
   routes: async (app) => {
-    app.post('/auth/login', { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } }, async (req, reply) => {
+    app.post('/auth/login', { config: { rateLimit: { max: config.isTest ? 10_000 : 10, timeWindow: '1 minute' } } }, async (req, reply) => {
       const input = parse(LoginInput, req.body);
       const row = await queryOne('SELECT * FROM staff_users WHERE email = $1', [input.email.toLowerCase()]);
       if (!row || !verifyPassword(input.password, row.password_hash)) throw unauthorized('Invalid email or password');
