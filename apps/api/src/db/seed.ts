@@ -159,11 +159,17 @@ export async function seedDemo(db: Db): Promise<void> {
   }
 
   const pw = hashPassword('nexora123');
+  const pwManager = hashPassword('manager123');
+  const pwHost = hashPassword('host123');
+  const pwAdmin = hashPassword('admin123');
   await db.query(
     `INSERT INTO staff_users (venue_id, email, name, role, password_hash) VALUES
      (NULL,'manager@nexora.dev','Priya Menon','MANAGER',$1),
-     ($2,'host@nexora.dev','Arjun Rao','HOST',$1)`,
-    [pw, venueIds[0]],
+     ($2,'host@nexora.dev','Arjun Rao','HOST',$1),
+     (NULL,'admin@nexora.internal','Org Admin','MANAGER',$3),
+     ($2,'manager@themill.com','Venue Manager','MANAGER',$4),
+     ($2,'host@themill.com','Lead Host','HOST',$5)`,
+    [pw, venueIds[0], pwAdmin, pwManager, pwHost],
   );
 
   const guestIds: string[] = [];

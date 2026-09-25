@@ -5,12 +5,12 @@ Work is split into **epics → stories** with acceptance criteria (AC). Each spr
 | Sprint | Team / agent | Owns | Status |
 |---|---|---|---|
 | 0 | Lead | Monorepo, shared contract, schema, seed, core domain layer, auth, realtime, design tokens, docs | ✅ Done |
-| A1 | Backend: Venue & Inventory | `apps/api/src/modules/venues/**`, `apps/api/test/venues*.test.ts` | ⏳ |
-| A2 | Backend: Booking Engine | `apps/api/src/modules/booking/**`, `apps/api/test/booking*.test.ts` | ⏳ |
-| A3 | Backend: Floor & Orders | `apps/api/src/modules/floor/**`, `apps/api/test/floor*.test.ts` | ⏳ |
-| A4 | Backend: Guest Intelligence & Commerce | `apps/api/src/modules/{guests,wifi,pos,loyalty}/**`, `apps/api/test/{guests,wifi,pos,loyalty}*.test.ts` | ⏳ |
-| B1 | Frontend: Consumer portal | `apps/web/app/(consumer)/**`, `apps/web/app/wifi/**`, `apps/web/components/consumer/**` | ⏳ |
-| B2 | Frontend: Admin console | `apps/web/app/admin/**`, `apps/web/components/admin/**` | ⏳ |
+| A1 | Backend: Venue & Inventory | `apps/api/src/modules/venues/**`, `apps/api/test/venues*.test.ts` | ✅ Done |
+| A2 | Backend: Booking Engine | `apps/api/src/modules/booking/**`, `apps/api/test/booking*.test.ts` | ✅ Done |
+| A3 | Backend: Floor & Orders | `apps/api/src/modules/floor/**`, `apps/api/test/floor*.test.ts` | ✅ Done |
+| A4 | Backend: Guest Intelligence & Commerce | `apps/api/src/modules/{guests,wifi,pos,loyalty}/**`, `apps/api/test/{guests,wifi,pos,loyalty}*.test.ts` | ✅ Done |
+| B1 | Frontend: Consumer portal | `apps/web/app/(consumer)/**`, `apps/web/app/wifi/**`, `apps/web/components/consumer/**` | ✅ Done |
+| B2 | Frontend: Admin console | `apps/web/app/admin/**`, `apps/web/components/admin/**` | ✅ Done |
 | C | Lead + QA | Integration, e2e (Playwright), load test, review, README, GitHub | ⏳ |
 
 ---

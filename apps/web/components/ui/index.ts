@@ -3,6 +3,8 @@ export * from './input';
 export * from './badge';
 export * from './card';
 export * from './dialog';
+export * from './sheet';
+export * from './switch';
 export * from './misc';
 export * from './spinner';
 export * from './logo';

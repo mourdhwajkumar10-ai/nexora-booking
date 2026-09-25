@@ -54,10 +54,19 @@ export const loyaltyModule: NexoraModule = {
       return rows.map((r) => toGiftCardDto(r));
     });
 
+    app.get<{ Params: { venueId: string } }>('/admin/venues/:venueId/gift-cards', { preHandler: requireStaff }, async (req) => {
+      assertVenueAccess(req.staff, req.params.venueId);
+      const rows = await query(`${GIFT_CARD_SELECT} ORDER BY gc.created_at DESC, gc.id LIMIT 200`);
+      return rows.map((r) => toGiftCardDto(r));
+    });
+
     app.post<{ Params: { id: string } }>('/admin/gift-cards/:id/reload', { preHandler: requireRole('MANAGER') }, async (req) => {
       const { amountPaise } = parse(ReloadInput, req.body);
+      const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(req.params.id);
       return withTx(async (tx) => {
-        const card = await tx.one('SELECT * FROM gift_cards WHERE id = $1 FOR UPDATE', [req.params.id]);
+        const card = isUuid
+          ? await tx.one('SELECT * FROM gift_cards WHERE id = $1 FOR UPDATE', [req.params.id])
+          : await tx.one('SELECT * FROM gift_cards WHERE last4 = $1 ORDER BY created_at DESC LIMIT 1 FOR UPDATE', [req.params.id]);
         if (!card) throw giftCardNotFound();
         await tx.query('UPDATE gift_cards SET current_balance_paise = current_balance_paise + $2 WHERE id = $1', [card.id, amountPaise]);
         await tx.query(`INSERT INTO gift_card_ledger (gift_card_id, kind, delta_paise) VALUES ($1,'RELOAD',$2)`, [card.id, amountPaise]);
