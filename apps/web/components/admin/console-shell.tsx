@@ -16,6 +16,7 @@ import {
   Inbox,
   LayoutGrid,
   LogOut,
+  Receipt,
   Settings as SettingsIcon,
   Sliders,
   Users,
@@ -36,7 +37,8 @@ const NAV_ITEMS = [
   { label: 'Triage', segment: 'triage', icon: Inbox },
   { label: 'Reservations', segment: 'reservations', icon: Calendar },
   { label: 'Guests', segment: 'guests', icon: Users },
-  { label: 'Payments & POS', segment: 'payments', icon: CreditCard },
+  { label: 'POS & Voids', segment: 'pos', icon: Receipt },
+  { label: 'Payments', segment: 'payments', icon: CreditCard },
   { label: 'Settings', segment: 'settings', icon: Sliders },
   { label: 'Activity & Logs', segment: 'activity', icon: Activity },
 ];

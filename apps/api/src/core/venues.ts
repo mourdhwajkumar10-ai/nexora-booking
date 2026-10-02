@@ -15,6 +15,9 @@ export interface VenueRow {
   image_url: string;
   cost_for_one_paise: number;
   cost_for_two_paise: number;
+  currency: 'USD' | 'INR';
+  locale: string;
+  reset_buffer_mins: number;
   timezone: string;
   turnaround_mins: number;
   grace_period_mins: number;

@@ -3,6 +3,7 @@ import {
   DWELL_RED_EXTRA_MINS,
   FLOOR_STATUSES,
   dwellLevel,
+  timerState,
   type FloorSnapshot,
   type FloorStatus,
   type FloorTable,
@@ -42,12 +43,12 @@ export async function buildFloorSnapshot(venueId: string, opts: { tableId?: stri
   const tableFilterO = opts.tableId ? 'AND o.table_id = $2' : '';
   const extra = opts.tableId ? [opts.tableId] : [];
 
-  const [tables, seated, orders, next] = await Promise.all([
-    // RESERVED (derived, ARCHITECTURE §3): a CONFIRMED booking with start − turnaround ≤ now < start + grace.
+  const [tables, seated, orders, next, combos] = await Promise.all([
+    // RESERVED (derived, ARCHITECTURE §3): a booking with start − turnaround ≤ now < start + grace.
     query(
       `SELECT t.*, EXISTS (
           SELECT 1 FROM reservations r
-          WHERE r.table_id = t.id AND r.status = 'CONFIRMED'
+          WHERE r.table_id = t.id AND r.status IN ('CONFIRMED', 'ARRIVED', 'LATE')
             AND r.start_at - make_interval(mins => $2) <= $3
             AND $3 < r.start_at + make_interval(mins => $4)
         ) AS reserved_now
@@ -58,7 +59,7 @@ export async function buildFloorSnapshot(venueId: string, opts: { tableId?: stri
     ),
     query(
       `SELECT DISTINCT ON (r.table_id)
-              r.id, r.table_id, r.guest_id, r.party_size, r.seated_at, r.source,
+              r.id, r.table_id, r.guest_id, r.party_size, r.seated_at, r.turn_minutes, r.source,
               g.first_name, g.last_name, gp.allergies,
               COALESCE((SELECT array_agg(tag_name ORDER BY tag_name) FROM guest_tags gt WHERE gt.guest_id = g.id), '{}') AS tags
        FROM reservations r
@@ -80,10 +81,22 @@ export async function buildFloorSnapshot(venueId: string, opts: { tableId?: stri
     query(
       `SELECT DISTINCT ON (r.table_id) r.id, r.table_id, r.party_size, r.start_at, r.status, g.first_name, g.last_name
        FROM reservations r JOIN guests g ON g.id = r.guest_id
-       WHERE r.venue_id = $1 AND r.status IN ('REQUESTED', 'CONFIRMED') AND r.table_id IS NOT NULL
-         AND r.start_at >= $2 ${tableFilterR}
-       ORDER BY r.table_id, r.start_at ASC`,
+       WHERE r.venue_id = $1 AND r.status IN ('REQUESTED', 'CONFIRMED', 'ARRIVED', 'LATE') AND r.table_id IS NOT NULL
+         AND (r.start_at >= $2 OR r.status IN ('ARRIVED', 'LATE')) ${tableFilterR}
+       ORDER BY r.table_id,
+                CASE WHEN r.status = 'ARRIVED' THEN 0 WHEN r.status = 'LATE' THEN 1 ELSE 2 END,
+                r.start_at ASC`,
       [venueId, new Date(now.getTime() - grace * 60_000), ...extra],
+      db,
+    ),
+    query<{ reservation_id: string; table_id: string; table_number: string }>(
+      `SELECT rt.reservation_id, rt.table_id, dt.table_number
+       FROM reservation_tables rt
+       JOIN dining_tables dt ON dt.id = rt.table_id
+       JOIN reservations r ON r.id = rt.reservation_id
+       WHERE dt.venue_id = $1
+         AND r.status IN ('REQUESTED', 'CONFIRMED', 'ARRIVED', 'SEATED', 'LATE')`,
+      [venueId],
       db,
     ),
   ]);
@@ -92,12 +105,53 @@ export async function buildFloorSnapshot(venueId: string, opts: { tableId?: stri
   const orderBy = new Map(orders.map((o) => [o.table_id, o]));
   const nextBy = new Map(next.map((r) => [r.table_id, r]));
 
+  const tablesByRes = new Map<string, { id: string; num: string }[]>();
+  const resByTable = new Map<string, string>();
+  for (const c of combos) {
+    const list = tablesByRes.get(c.reservation_id) ?? [];
+    list.push({ id: c.table_id, num: c.table_number });
+    tablesByRes.set(c.reservation_id, list);
+    resByTable.set(c.table_id, c.reservation_id);
+  }
+
   const out: FloorTable[] = tables.map((t) => {
-    const s = seatedBy.get(t.id);
+    let s = seatedBy.get(t.id);
     const o = orderBy.get(t.id);
-    const n = nextBy.get(t.id);
-    const floorStatus: FloorStatus = t.status === 'AVAILABLE' && t.reserved_now ? 'RESERVED' : t.status;
+    let n = nextBy.get(t.id);
+
+    const comboResId = resByTable.get(t.id);
+    const comboGroup = comboResId ? tablesByRes.get(comboResId) : null;
+    const isCombination = (comboGroup?.length ?? 0) > 1;
+    const combinedTableNumbers = isCombination ? comboGroup!.map((x) => x.num) : undefined;
+
+    if (!s && comboResId && isCombination) {
+      for (const sibling of comboGroup!) {
+        const sibSeated = seatedBy.get(sibling.id);
+        if (sibSeated) {
+          s = sibSeated;
+          break;
+        }
+      }
+    }
+
+    if (!n && comboResId && isCombination) {
+      for (const sibling of comboGroup!) {
+        const sibNext = nextBy.get(sibling.id);
+        if (sibNext) {
+          n = sibNext;
+          break;
+        }
+      }
+    }
+
+    const isOccupied = t.status === 'OCCUPIED' || (s !== undefined && s !== null);
+    const floorStatus: FloorStatus = isOccupied ? 'OCCUPIED' : t.status === 'AVAILABLE' && t.reserved_now ? 'RESERVED' : t.status;
     const elapsedSecs = s ? Math.max(0, Math.floor((now.getTime() - new Date(s.seated_at).getTime()) / 1000)) : 0;
+    const partySize = s?.party_size ?? t.max_capacity;
+    const turnMinutes = s?.turn_minutes ?? (partySize <= 2 ? 75 : partySize <= 4 ? 90 : 120);
+    const seatedAtMs = s ? new Date(s.seated_at).getTime() : 0;
+    const timer = s ? timerState(seatedAtMs, turnMinutes, now.getTime()) : null;
+
     return {
       id: t.id,
       tableNumber: t.table_number,
@@ -107,6 +161,8 @@ export async function buildFloorSnapshot(venueId: string, opts: { tableId?: stri
       physicalStatus: t.status,
       floorStatus,
       statusChangedAt: iso(t.status_changed_at)!,
+      isCombination,
+      combinedTableNumbers,
       current: s
         ? {
             reservationId: s.id,
@@ -117,6 +173,7 @@ export async function buildFloorSnapshot(venueId: string, opts: { tableId?: stri
             tags: s.tags ?? [],
             allergies: s.allergies ?? null,
             source: s.source,
+            combinedWith: isCombination ? combinedTableNumbers : undefined,
           }
         : null,
       order: o
@@ -132,7 +189,15 @@ export async function buildFloorSnapshot(venueId: string, opts: { tableId?: stri
       next: n
         ? { reservationId: n.id, guestName: guestDisplayName(n), partySize: n.party_size, startAt: iso(n.start_at)!, status: n.status }
         : null,
-      dwell: s ? { seatedAt: iso(s.seated_at)!, elapsedSecs, level: dwellLevel(elapsedSecs, turn, DWELL_RED_EXTRA_MINS) } : null,
+      dwell: s && timer
+        ? {
+            seatedAt: iso(s.seated_at)!,
+            elapsedSecs,
+            elapsedMinutes: timer.elapsedMinutes,
+            turnMinutes,
+            level: timer.level,
+          }
+        : null,
     };
   });
   out.sort(compareTables);

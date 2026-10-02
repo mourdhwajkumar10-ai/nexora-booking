@@ -50,11 +50,12 @@ export async function analyseWalkIn(
   const [tables, hits] = await Promise.all([
     query(`SELECT * FROM dining_tables WHERE venue_id = $1 AND archived_at IS NULL`, [venue.id], db),
     query(
-      `SELECT r.id, r.table_id, r.start_at, t.table_number, g.first_name, g.last_name
+      `SELECT r.id, COALESCE(rt.table_id, r.table_id) AS table_id, r.start_at, t.table_number, g.first_name, g.last_name
        FROM reservations r
-       JOIN dining_tables t ON t.id = r.table_id
+       LEFT JOIN reservation_tables rt ON rt.reservation_id = r.id
+       JOIN dining_tables t ON t.id = COALESCE(rt.table_id, r.table_id)
        JOIN guests g ON g.id = r.guest_id
-       WHERE r.venue_id = $1 AND r.status IN ('REQUESTED', 'CONFIRMED') AND r.table_id IS NOT NULL
+       WHERE r.venue_id = $1 AND r.status IN ('REQUESTED', 'CONFIRMED')
          AND r.start_at < $2 AND r.end_at > $3
        ORDER BY r.start_at, t.table_number`,
       [venue.id, windowEnd, now],
@@ -119,45 +120,52 @@ async function resolveWalkInGuest(tx: Tx, input: { guestName?: string; phone?: s
 }
 
 /** Seat a walk-in (E3-S2): SEATED/WALK_IN reservation + table OCCUPIED + open check, atomically. */
-export async function createWalkIn(venueId: string, input: z.infer<typeof WalkInInput>, actor: string): Promise<AdminReservation> {
+export async function createWalkIn(
+  venueId: string,
+  input: z.infer<typeof WalkInInput>,
+  actor: string,
+  externalTx?: Tx,
+): Promise<AdminReservation> {
+  const execute = async (tx: Tx) => {
+    const venue = await getVenueById(venueId, tx.client);
+    const table = await lockTable(tx, input.tableId);
+    if (table.venue_id !== venueId) throw notFound('Table');
+    if (table.status !== 'AVAILABLE') {
+      throw conflict('TABLE_NOT_READY', `Table ${table.table_number} is not ready (${table.status})`, { status: table.status });
+    }
+    if (input.partySize > table.max_capacity) {
+      throw unprocessable('PARTY_TOO_LARGE', `Table ${table.table_number} seats at most ${table.max_capacity}`);
+    }
+    const a = await analyseWalkIn(venue, input.partySize, table.id, tx.client);
+    if (a.conflicts.length > 0) {
+      if (!input.override) throw conflict('WALK_IN_COLLISION', a.message!, { conflicts: a.conflicts, suggestions: a.suggestions });
+      await audit(tx, {
+        venueId,
+        actor,
+        action: 'walk_in.override',
+        entity: 'table',
+        entityId: table.id,
+        data: { partySize: input.partySize, conflicts: a.conflicts },
+      });
+    }
+
+    const guestId = await resolveWalkInGuest(tx, input);
+    const now = clock.now();
+    const r = (await tx.one<ReservationRow>(
+      `INSERT INTO reservations (venue_id, table_id, guest_id, party_size, booking_date, start_at, end_at, source, status, seated_at, created_at, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,'WALK_IN','SEATED',$6,$6,$6) RETURNING *`,
+      [venueId, table.id, guestId, input.partySize, utcToZonedParts(now, venue.timezone).date, now, addMinutes(now, venue.turnaround_mins)],
+    ))!;
+    await recordCreated(tx, r, actor, input.override && a.conflicts.length ? 'walk-in (collision override)' : 'walk-in');
+    await setTableStatus(tx, table, 'OCCUPIED');
+    await openOrder(tx, { venueId, tableId: table.id, reservationId: r.id, guestId });
+    await tx.query('UPDATE guest_profiles SET last_visit_at = $2 WHERE guest_id = $1', [guestId, now]);
+    return r.id;
+  };
+
   let reservationId: string;
   try {
-    reservationId = await withTx(async (tx) => {
-      const venue = await getVenueById(venueId, tx.client);
-      const table = await lockTable(tx, input.tableId);
-      if (table.venue_id !== venueId) throw notFound('Table');
-      if (table.status !== 'AVAILABLE') {
-        throw conflict('TABLE_NOT_READY', `Table ${table.table_number} is not ready (${table.status})`, { status: table.status });
-      }
-      if (input.partySize > table.max_capacity) {
-        throw unprocessable('PARTY_TOO_LARGE', `Table ${table.table_number} seats at most ${table.max_capacity}`);
-      }
-      const a = await analyseWalkIn(venue, input.partySize, table.id, tx.client);
-      if (a.conflicts.length > 0) {
-        if (!input.override) throw conflict('WALK_IN_COLLISION', a.message!, { conflicts: a.conflicts, suggestions: a.suggestions });
-        await audit(tx, {
-          venueId,
-          actor,
-          action: 'walk_in.override',
-          entity: 'table',
-          entityId: table.id,
-          data: { partySize: input.partySize, conflicts: a.conflicts },
-        });
-      }
-
-      const guestId = await resolveWalkInGuest(tx, input);
-      const now = clock.now();
-      const r = (await tx.one<ReservationRow>(
-        `INSERT INTO reservations (venue_id, table_id, guest_id, party_size, booking_date, start_at, end_at, source, status, seated_at, created_at, updated_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,'WALK_IN','SEATED',$6,$6,$6) RETURNING *`,
-        [venueId, table.id, guestId, input.partySize, utcToZonedParts(now, venue.timezone).date, now, addMinutes(now, venue.turnaround_mins)],
-      ))!;
-      await recordCreated(tx, r, actor, input.override && a.conflicts.length ? 'walk-in (collision override)' : 'walk-in');
-      await setTableStatus(tx, table, 'OCCUPIED');
-      await openOrder(tx, { venueId, tableId: table.id, reservationId: r.id, guestId });
-      await tx.query('UPDATE guest_profiles SET last_visit_at = $2 WHERE guest_id = $1', [guestId, now]);
-      return r.id;
-    });
+    reservationId = externalTx ? await execute(externalTx) : await withTx(execute);
   } catch (err: any) {
     if (err?.code === '23P01') {
       // Override can bypass the (turnaround + buffer) heuristic but never the physical interval.

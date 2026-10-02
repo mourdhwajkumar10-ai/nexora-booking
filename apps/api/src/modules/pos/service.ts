@@ -3,8 +3,32 @@
  * transaction -> PROCESSED, or FAILED with backoff -> DEAD (DLQ) + WEBHOOK_DEAD alert.
  */
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import { PosWebhookBody, WEBHOOK_RETRY_SCHEDULE_SECS, type WebhookEventDto } from '@nexora/shared';
+import {
+  DEFAULT_VOID_REASON_MAPPINGS,
+  PosWebhookBody,
+  WEBHOOK_RETRY_SCHEDULE_SECS,
+  classifyAdjustment,
+  findReservationForCheck,
+  chooseGuestCredit,
+  type AttributionClass,
+  type WebhookEventDto,
+  type LinkReservation,
+  type CreditSignals,
+} from '@nexora/shared';
 import { config } from '../../config';
+
+export const POS_REASON_MAPPINGS: Record<string, AttributionClass> = {
+  ...DEFAULT_VOID_REASON_MAPPINGS,
+  GUEST_CANCELLED: 'GUEST',
+  GUEST_LEFT: 'GUEST',
+  CUSTOMER_REQUEST: 'GUEST',
+  BURNT: 'KITCHEN',
+  OUT_OF_STOCK: 'KITCHEN',
+  SERVER_ERROR: 'SERVER_ENTRY',
+  WRONG_ITEM: 'SERVER_ENTRY',
+  PROMO: 'PROMOTIONAL',
+  SYSTEM_GLITCH: 'SYSTEM',
+};
 import { query, queryOne, withTx, type Tx } from '../../db/pool';
 import { createAlert } from '../../core/alerts';
 import { lockOrder, recalcOrderTotals, type OrderRow } from '../../core/orders';
@@ -83,22 +107,30 @@ export async function ingestPosWebhook(input: {
 async function applyPosEvent(tx: Tx, body: PosWebhookBody): Promise<void> {
   const order = await lockOrder(tx, body.orderId);
   const open = !['BILLED', 'VOIDED'].includes(order.status);
-  let adjustment: { kind: 'VOID' | 'COMP' | 'REFUND'; amount: number; postSettlement: boolean } | null = null;
   const now = clock.now();
 
-  switch (body.type) {
-    case 'ticket.updated': {
-      if (!open) throw conflict('ORDER_CLOSED', `Order is ${order.status}`);
-      for (const it of body.items) {
-        await tx.query(
-          `INSERT INTO pos_order_items (order_id, item_name, category, quantity, unit_price_paise, notes, created_at)
-           VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-          [order.id, it.itemName, it.category, it.quantity, it.unitPricePaise, it.notes ?? null, now],
-        );
-      }
-      if (body.posExternalId) await tx.query('UPDATE pos_orders SET pos_external_id = $2 WHERE id = $1', [order.id, body.posExternalId]);
-      break;
+  if (body.type === 'ticket.updated') {
+    if (!open) throw conflict('ORDER_CLOSED', `Order is ${order.status}`);
+    for (const it of body.items) {
+      await tx.query(
+        `INSERT INTO pos_order_items (order_id, item_name, category, quantity, unit_price_paise, notes, created_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+        [order.id, it.itemName, it.category, it.quantity, it.unitPricePaise, it.notes ?? null, now],
+      );
     }
+    if (body.posExternalId) await tx.query('UPDATE pos_orders SET pos_external_id = $2 WHERE id = $1', [order.id, body.posExternalId]);
+    await recalcOrderTotals(tx, order.id);
+    return;
+  }
+
+  let adjustment: {
+    kind: 'VOID' | 'COMP' | 'REFUND';
+    amount: number;
+    postSettlement: boolean;
+    itemId: string | null;
+  } | null = null;
+
+  switch (body.type) {
     case 'order.item_voided':
     case 'order.refunded': {
       const refund = body.type === 'order.refunded';
@@ -108,23 +140,63 @@ async function applyPosEvent(tx: Tx, body: PosWebhookBody): Promise<void> {
       if (!item) throw notFound('Order item');
       if (item.is_voided) return; // already voided: acknowledged, no-op
       await tx.query('UPDATE pos_order_items SET is_voided = true WHERE id = $1', [item.id]);
-      adjustment = { kind: refund ? 'REFUND' : 'VOID', amount: item.quantity * item.unit_price_paise, postSettlement: refund };
-      await insertVoidLog(tx, order, item.id, adjustment, body.reason, body.authorizedBy);
+      adjustment = { kind: refund ? 'REFUND' : 'VOID', amount: item.quantity * item.unit_price_paise, postSettlement: refund, itemId: item.id };
       break;
     }
     case 'order.comp_applied': {
       if (!open) throw conflict('ORDER_CLOSED', `Order is ${order.status}`);
       const amount = Math.min(body.amountPaise, order.net_paise);
       if (amount <= 0) return;
-      adjustment = { kind: 'COMP', amount, postSettlement: false };
-      await insertVoidLog(tx, order, null, adjustment, body.reason, body.authorizedBy);
+      adjustment = { kind: 'COMP', amount, postSettlement: false, itemId: null };
       break;
     }
   }
 
-  await recalcOrderTotals(tx, order.id);
   if (!adjustment) return;
-  if (order.guest_id && adjustment.kind !== 'COMP') {
+
+  const firedAtMs = order.preparing_at
+    ? new Date(order.preparing_at).getTime()
+    : ['PREPARING', 'SERVED', 'BILLED'].includes(order.status)
+      ? new Date(order.placed_at).getTime()
+      : null;
+
+  const classification = classifyAdjustment({
+    kind: adjustment.kind === 'COMP' ? 'comp' : adjustment.kind === 'REFUND' ? 'refund' : 'void',
+    reasonRef: body.reason,
+    mappings: POS_REASON_MAPPINGS,
+    firedAtMs,
+    occurredAtMs: now.getTime(),
+    fireDataAvailable: true,
+  });
+
+  await insertVoidLog(tx, order, adjustment, body.reason, body.authorizedBy, classification, now);
+
+  await tx.query(
+    `INSERT INTO pos_adjustments (
+      venue_id, order_id, order_item_id, kind, reason_ref, reason_label,
+      attribution_class, fired_before, counts_as_guest_return, amount_paise,
+      authorized_by, post_settlement, created_at
+    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+    [
+      order.venue_id,
+      order.id,
+      adjustment.itemId,
+      adjustment.kind,
+      body.reason,
+      body.reason,
+      classification.attributionClass,
+      classification.firedBefore,
+      classification.countsAsGuestReturn,
+      adjustment.amount,
+      body.authorizedBy,
+      adjustment.postSettlement,
+      now,
+    ],
+  );
+
+  await recalcOrderTotals(tx, order.id);
+
+  if (order.guest_id && classification.countsAsGuestReturn) {
     await tx.query('INSERT INTO guest_profiles (guest_id) VALUES ($1) ON CONFLICT DO NOTHING', [order.guest_id]);
     await tx.query(
       `UPDATE guest_profiles SET total_voids_count = total_voids_count + 1, total_voids_value_paise = total_voids_value_paise + $2
@@ -132,6 +204,7 @@ async function applyPosEvent(tx: Tx, body: PosWebhookBody): Promise<void> {
       [order.guest_id, adjustment.amount],
     );
   }
+
   tx.emit({
     type: 'order.adjusted',
     venueId: order.venue_id,
@@ -146,15 +219,28 @@ async function applyPosEvent(tx: Tx, body: PosWebhookBody): Promise<void> {
 async function insertVoidLog(
   tx: Tx,
   order: OrderRow,
-  itemId: string | null,
-  adj: { kind: string; amount: number; postSettlement: boolean },
+  adj: { kind: string; amount: number; postSettlement: boolean; itemId: string | null },
   reason: string,
   authorizedBy: string,
+  classification: ReturnType<typeof classifyAdjustment>,
+  now: Date,
 ): Promise<void> {
   await tx.query(
-    `INSERT INTO pos_void_logs (order_id, order_item_id, kind, void_reason, authorized_by, amount_voided_paise, post_settlement, created_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-    [order.id, itemId, adj.kind, reason, authorizedBy, adj.amount, adj.postSettlement, clock.now()],
+    `INSERT INTO pos_void_logs (order_id, order_item_id, kind, void_reason, authorized_by, amount_voided_paise, post_settlement, attribution, attribution_class, counts_as_guest_return, created_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+    [
+      order.id,
+      adj.itemId,
+      adj.kind,
+      reason,
+      authorizedBy,
+      adj.amount,
+      adj.postSettlement,
+      classification.attributionClass,
+      classification.attributionClass,
+      classification.countsAsGuestReturn,
+      now,
+    ],
   );
 }
 
@@ -228,3 +314,75 @@ export async function retryDueWebhooks(): Promise<void> {
   );
   for (const r of due) await processWebhookEvent(r.id);
 }
+
+/**
+ * BR-14: Link POS check to reservation on the same table within the dining window,
+ * and assign guest credit using priority ladder.
+ */
+export async function linkCheckToReservation(
+  orderId: string,
+  staffGuestId?: string,
+): Promise<{
+  linkedReservationId: string | null;
+  guestId: string | null;
+  method: string | null;
+  confidence: number | null;
+}> {
+  return withTx(async (tx) => {
+    const order = await tx.one('SELECT * FROM pos_orders WHERE id = $1 FOR UPDATE', [orderId]);
+    if (!order) throw notFound('Order');
+    if (!order.table_id) return { linkedReservationId: null, guestId: order.guest_id ?? null, method: null, confidence: null };
+
+    const activeRes = await tx.query(
+      `SELECT r.*,
+              COALESCE((SELECT array_agg(rt.table_id) FROM reservation_tables rt WHERE rt.reservation_id = r.id), ARRAY[r.table_id]) AS table_ids
+       FROM reservations r
+       WHERE r.venue_id = $1 AND (r.table_id = $2 OR EXISTS (SELECT 1 FROM reservation_tables rt WHERE rt.reservation_id = r.id AND rt.table_id = $2))
+         AND r.status IN ('CONFIRMED', 'ARRIVED', 'SEATED', 'COMPLETED', 'LATE')`,
+      [order.venue_id, order.table_id],
+    );
+
+    const reservations: LinkReservation[] = activeRes.map((r) => ({
+      id: r.id,
+      tableIds: r.table_ids || [r.table_id],
+      startsAtMs: new Date(r.start_at).getTime(),
+      seatedAtMs: r.seated_at ? new Date(r.seated_at).getTime() : null,
+      completedAtMs: r.completed_at ? new Date(r.completed_at).getTime() : null,
+      turnMinutes: r.turn_minutes || 90,
+      status: r.status.toLowerCase() as any,
+    }));
+
+    const linkedReservationId = findReservationForCheck(
+      { tableId: order.table_id, openedAtMs: new Date(order.placed_at).getTime() },
+      reservations,
+    );
+
+    let resGuestId: string | null = null;
+    if (linkedReservationId) {
+      const res = activeRes.find((r) => r.id === linkedReservationId);
+      resGuestId = res?.guest_id ?? null;
+    }
+
+    const signals: CreditSignals = {
+      staffGuestId: staffGuestId ?? null,
+      posCustomerGuestId: order.guest_id ?? null,
+      reservationGuestId: resGuestId,
+    };
+
+    const credit = chooseGuestCredit(signals);
+    if (credit?.guestId && credit.guestId !== order.guest_id) {
+      await tx.query('UPDATE pos_orders SET guest_id = $1 WHERE id = $2', [credit.guestId, order.id]);
+    }
+    if (linkedReservationId && order.reservation_id !== linkedReservationId) {
+      await tx.query('UPDATE pos_orders SET reservation_id = $1 WHERE id = $2', [linkedReservationId, order.id]);
+    }
+
+    return {
+      linkedReservationId,
+      guestId: credit?.guestId ?? order.guest_id ?? null,
+      method: credit?.method ?? null,
+      confidence: credit?.confidence ?? null,
+    };
+  });
+}
+

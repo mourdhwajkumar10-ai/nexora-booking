@@ -21,6 +21,7 @@ import {
   type TierLevel,
 } from './constants';
 import type { DwellLevel } from './time';
+import type { Currency } from './money';
 
 // ---------- primitives ----------
 export const zDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Expected YYYY-MM-DD');
@@ -63,6 +64,9 @@ export interface VenueCard {
   imageUrl: string;
   costForOnePaise: number;
   costForTwoPaise: number;
+  currency?: Currency;
+  locale?: string;
+  resetBufferMins?: number;
   isOpenNow: boolean;
   acceptingBookings: boolean; // false when in blackout mode
   todayHours: { openTime: string; closeTime: string }[];
@@ -132,8 +136,10 @@ export interface PublicReservation {
   tableNumber: string | null; // revealed once CONFIRMED
   createdAt: string;
   confirmedAt: string | null;
+  arrivedAt?: string | null;
   cancelledAt: string | null;
   cancelReason: string | null;
+  turnMinutes?: number;
 }
 
 /** 409 body for SLOT_UNAVAILABLE: error.details = { alternatives: string[] } ("HH:mm" list). */
@@ -176,6 +182,9 @@ export const UpdateVenueInput = z
     allowUpsizeFallback: z.boolean(),
     costForOnePaise: z.coerce.number().int().positive(),
     costForTwoPaise: z.coerce.number().int().positive(),
+    currency: z.enum(['USD', 'INR']),
+    locale: z.enum(['en-US', 'en-IN']),
+    resetBufferMins: z.coerce.number().int().min(0).max(60),
     isActive: z.boolean(),
   })
   .partial();
@@ -268,10 +277,12 @@ export interface AdminReservation {
   triageDeadline: string | null; // created_at + triage timeout (REQUESTED only)
   createdAt: string;
   confirmedAt: string | null;
+  arrivedAt?: string | null;
   seatedAt: string | null;
   completedAt: string | null;
   cancelledAt: string | null;
   cancelReason: string | null;
+  turnMinutes?: number;
 }
 
 export const ListReservationsQuery = z.object({
@@ -311,6 +322,8 @@ export interface FloorTable {
   physicalStatus: TableStatus;
   floorStatus: FloorStatus;
   statusChangedAt: string;
+  isCombination?: boolean;
+  combinedTableNumbers?: string[];
   current: {
     reservationId: string;
     guestId: string;
@@ -320,6 +333,7 @@ export interface FloorTable {
     tags: string[];
     allergies: string | null;
     source: ReservationSource;
+    combinedWith?: string[];
   } | null;
   order: {
     id: string;
@@ -336,7 +350,13 @@ export interface FloorTable {
     startAt: string;
     status: ReservationStatus;
   } | null;
-  dwell: { seatedAt: string; elapsedSecs: number; level: DwellLevel } | null;
+  dwell: {
+    seatedAt: string;
+    elapsedSecs: number;
+    level: DwellLevel;
+    elapsedMinutes?: number;
+    turnMinutes?: number;
+  } | null;
 }
 
 export interface FloorSnapshot {
@@ -512,6 +532,16 @@ export interface LedgerEntryDto {
 }
 
 export const WifiOtpInput = z.object({ phone: zPhone });
+export const WifiHandshakeInput = z.object({
+  mac: zMac.optional(),
+});
+export interface WifiHandshakeResponse {
+  handshakeToken: string;
+  expiresAt: string;
+  deviceHash?: string;
+  isReturningDevice?: boolean;
+}
+
 export const WifiConnectInput = z.object({
   firstName: z.string().trim().min(1).max(128),
   lastName: z.string().trim().min(1).max(128),
@@ -519,6 +549,7 @@ export const WifiConnectInput = z.object({
   email: z.string().trim().email().optional().or(z.literal('').transform(() => undefined)),
   otp: z.string().regex(/^\d{6}$/),
   mac: zMac,
+  handshakeToken: z.string().optional(),
   apId: z.string().max(64).optional(),
   marketingOptIn: z.boolean().default(false),
   consent: z.literal(true, { error: 'Consent is required to connect' }),
@@ -528,6 +559,8 @@ export interface WifiConnectResponse {
   guestName: string;
   tier: TierLevel;
   isNewGuest: boolean;
+  isReturningGuest?: boolean;
+  deviceHash?: string;
   matchedReservation: { id: string; time: string; tableNumber: string | null } | null;
 }
 
@@ -612,4 +645,127 @@ export interface GiftCardAuthorizeResponse {
   holdToken: string;
   expiresAt: string;
   availablePaise: number;
+}
+
+/* =============================== Pillar 2: Consent & Identity Merge =============================== */
+export const ConsentRecordInput = z.object({
+  senderKey: z.string().min(1),
+  consentType: z.enum([
+    'sms_marketing',
+    'email_marketing',
+    'push_marketing',
+    'sms_all',
+    'email_feedback',
+    'presence_recognition',
+    'allergy_sharing',
+    'financial_incentive_loyalty',
+    'financial_incentive_wifi',
+    'wifi_terms',
+  ]),
+  subjectKey: z.string().min(1),
+  action: z.enum(['grant', 'revoke']),
+  method: z.enum([
+    'checkbox',
+    'keyword',
+    'privacy_center',
+    'staff',
+    'sms_stop',
+    'sms_start',
+    'email_unsubscribe',
+    'natural_language',
+    'carrier',
+    'import',
+    'api',
+    'system',
+  ]),
+  surface: z.string().optional(),
+  evidence: z.record(z.string(), z.unknown()).optional(),
+  guestId: zUuid.optional(),
+});
+
+export const GuestMergeInput = z.object({
+  survivorId: zUuid,
+  loserId: zUuid,
+});
+
+/* =============================== Pillar 3: Loyalty Vouchers =============================== */
+export const IssueVoucherInput = z.object({
+  valueCents: z.number().int().refine((v) => [500, 1000, 2500].includes(v), {
+    message: 'Voucher denomination must be $5 (500 pts), $10 (1000 pts), or $25 (2500 pts)',
+  }),
+});
+
+export const RedeemVoucherInput = z.object({
+  code: z.string().min(1),
+});
+
+export interface VoucherDto {
+  id: string;
+  code: string;
+  formattedCode: string;
+  valueCents: number;
+  points: number;
+  status: 'held' | 'redeemed' | 'expired' | 'cancelled';
+  expiresAt: string;
+  redeemedAt?: string | null;
+  redeemedVenueId?: string | null;
+  redeemedBy?: string | null;
+  createdAt: string;
+}
+
+/* =============================== Pillar 4: CRM & Campaigns =============================== */
+export const CreateSegmentInput = z.object({
+  name: z.string().trim().min(1).max(128),
+  definition: z.object({
+    all: z.array(
+      z.union([
+        z.object({ field: z.literal('visit_count'), op: z.enum(['gte', 'lte', 'eq']), value: z.number() }),
+        z.object({ field: z.literal('days_since_last_visit'), op: z.enum(['gte', 'lte']), value: z.number() }),
+        z.object({ field: z.literal('lifetime_spend_cents'), op: z.enum(['gte', 'lte']), value: z.number() }),
+        z.object({ field: z.literal('avg_check_per_cover_cents'), op: z.enum(['gte', 'lte']), value: z.number() }),
+        z.object({ field: z.literal('typical_party_size'), op: z.enum(['gte', 'lte', 'eq']), value: z.number() }),
+        z.object({ field: z.literal('tag'), op: z.enum(['has', 'not_has']), value: z.string() }),
+        z.object({ field: z.literal('ordered_item'), op: z.literal('has'), value: z.string() }),
+        z.object({ field: z.literal('birthday_month'), op: z.literal('eq'), value: z.number() }),
+      ]),
+    ),
+  }),
+});
+
+export const CreateCampaignInput = z.object({
+  name: z.string().trim().min(1).max(128),
+  channel: z.enum(['sms', 'email']),
+  segmentId: zUuid.optional(),
+  subject: z.string().optional(),
+  bodyText: z.string().min(1),
+  holdoutPct: z.number().int().min(0).max(50).default(10),
+  attributionWindowDays: z.number().int().min(1).max(30).default(7),
+  costCents: z.number().int().min(0).default(0),
+  grossMarginBps: z.number().int().min(0).max(10_000).default(7000),
+});
+
+/* =============================== Pillar 5: Waitlist =============================== */
+export const WaitlistJoinInput = z.object({
+  guestName: z.string().trim().min(1).max(128),
+  phone: zPhone,
+  partySize: z.number().int().positive().max(20),
+  notes: z.string().max(500).optional(),
+});
+
+export const WaitlistSeatInput = z.object({
+  tableId: zUuid,
+});
+
+export interface WaitlistEntryDto {
+  id: string;
+  venueId: string;
+  guestId: string;
+  guestName?: string;
+  guestPhone?: string;
+  partySize: number;
+  status: 'WAITING' | 'NOTIFIED' | 'SEATED' | 'CANCELLED';
+  quotedMinutes: number;
+  notes?: string | null;
+  joinedAt: string;
+  seatedAt?: string | null;
 }

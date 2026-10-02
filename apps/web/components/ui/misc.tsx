@@ -24,7 +24,21 @@ export function Separator({ className }: { className?: string }) {
 }
 
 /** Segmented control (Vercel-style tabs). */
-export function Segmented<T extends string>({ value, onChange, options, className, ariaLabel }: { value: T; onChange: (v: T) => void; options: { value: T; label: React.ReactNode }[]; className?: string; ariaLabel: string }) {
+export function Segmented<T extends string>({
+  value,
+  onChange,
+  options,
+  className,
+  itemClassName,
+  ariaLabel,
+}: {
+  value: T;
+  onChange: (v: T) => void;
+  options: { value: T; label: React.ReactNode }[];
+  className?: string;
+  itemClassName?: string;
+  ariaLabel: string;
+}) {
   return (
     <div role="radiogroup" aria-label={ariaLabel} className={cn('inline-flex rounded-lg border border-border bg-background-2 p-0.5', className)}>
       {options.map((o) => (
@@ -37,6 +51,7 @@ export function Segmented<T extends string>({ value, onChange, options, classNam
           className={cn(
             'h-8 rounded-md px-3 text-[13px] font-medium text-gray-900 transition-colors',
             value === o.value ? 'bg-background text-gray-1000 shadow-sm ring-1 ring-border' : 'hover:text-gray-1000',
+            itemClassName,
           )}
         >
           {o.label}

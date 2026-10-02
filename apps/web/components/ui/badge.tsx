@@ -13,9 +13,9 @@ const tones: Record<BadgeTone, string> = {
   accent: 'bg-accent-soft text-accent border-accent/20',
 };
 
-export function Badge({ tone = 'neutral', className, children, dot }: { tone?: BadgeTone; className?: string; children: React.ReactNode; dot?: boolean }) {
+export function Badge({ tone = 'neutral', className, children, dot, title }: { tone?: BadgeTone; className?: string; children: React.ReactNode; dot?: boolean; title?: string }) {
   return (
-    <span className={cn('inline-flex h-6 items-center gap-1.5 whitespace-nowrap rounded-full border px-2.5 text-xs font-medium', tones[tone], className)}>
+    <span title={title} className={cn('inline-flex h-6 items-center gap-1.5 whitespace-nowrap rounded-full border px-2.5 text-xs font-medium', tones[tone], className)}>
       {dot ? <span aria-hidden className="size-1.5 rounded-full bg-current" /> : null}
       {children}
     </span>
@@ -31,6 +31,8 @@ export const STATUS_TONE: Record<string, BadgeTone> = {
   BLOCKED: 'slate',
   REQUESTED: 'amber',
   CONFIRMED: 'green',
+  ARRIVED: 'blue',
+  LATE: 'amber',
   SEATED: 'blue',
   COMPLETED: 'neutral',
   CANCELLED: 'slate',

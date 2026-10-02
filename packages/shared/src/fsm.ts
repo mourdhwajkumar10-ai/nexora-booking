@@ -3,7 +3,9 @@ import type { OrderStatus, ReservationStatus, TableStatus } from './constants';
 
 export const RESERVATION_TRANSITIONS: Record<ReservationStatus, readonly ReservationStatus[]> = {
   REQUESTED: ['CONFIRMED', 'CANCELLED'],
-  CONFIRMED: ['SEATED', 'CANCELLED', 'NO_SHOW'],
+  CONFIRMED: ['ARRIVED', 'SEATED', 'LATE', 'CANCELLED', 'NO_SHOW'],
+  ARRIVED: ['SEATED', 'CANCELLED', 'NO_SHOW'],
+  LATE: ['ARRIVED', 'SEATED', 'CANCELLED', 'NO_SHOW'],
   SEATED: ['COMPLETED'],
   COMPLETED: [],
   CANCELLED: [],

@@ -9,6 +9,7 @@ import { config } from '../config';
 import { on } from './bus';
 import { clock } from './clock';
 import { loadAdminReservation, loadPublicReservation } from '../core/reservations';
+import { query } from '../db/pool';
 
 let io: Server<ClientToServerEvents, ServerToClientEvents> | null = null;
 
@@ -63,7 +64,14 @@ export function initRealtime(app: FastifyInstance): void {
     io.to(`venue:${e.venueId}`).emit('reservation:changed', { venueId: e.venueId, reservation, serverTime: now() });
     const pub = await loadPublicReservation(reservation.token);
     io.to(`booking:${reservation.token}`).emit('booking:status', { token: pub.token, status: pub.status, tableNumber: pub.tableNumber, serverTime: now() });
-    if (e.tableId) io.to(`venue:${e.venueId}`).emit('floor:changed', { venueId: e.venueId, tableIds: [e.tableId], serverTime: now() });
+    const assocTables = await query<{ table_id: string }>(
+      'SELECT table_id FROM reservation_tables WHERE reservation_id = $1',
+      [e.reservationId],
+    );
+    const tableIds = assocTables.length > 0 ? assocTables.map((t) => t.table_id) : e.tableId ? [e.tableId] : [];
+    if (tableIds.length > 0) {
+      io.to(`venue:${e.venueId}`).emit('floor:changed', { venueId: e.venueId, tableIds, serverTime: now() });
+    }
   });
   on('table.changed', (e) => {
     io?.to(`venue:${e.venueId}`).emit('floor:changed', { venueId: e.venueId, tableIds: e.tableIds, serverTime: now() });

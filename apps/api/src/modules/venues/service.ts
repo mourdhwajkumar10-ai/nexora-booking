@@ -113,6 +113,9 @@ const VENUE_COLUMNS: Record<keyof UpdateVenueInput, string> = {
   allowUpsizeFallback: 'allow_upsize_fallback',
   costForOnePaise: 'cost_for_one_paise',
   costForTwoPaise: 'cost_for_two_paise',
+  currency: 'currency',
+  locale: 'locale',
+  resetBufferMins: 'reset_buffer_mins',
   isActive: 'is_active',
 };
 

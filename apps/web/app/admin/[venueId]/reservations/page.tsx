@@ -14,6 +14,7 @@ import {
   Utensils,
   XCircle,
   Armchair,
+  UserCheck,
   UserX,
   PhoneCall,
   Globe,
@@ -48,7 +49,9 @@ const STATUS_FILTERS = [
   'ALL',
   'REQUESTED',
   'CONFIRMED',
+  'ARRIVED',
   'SEATED',
+  'LATE',
   'COMPLETED',
   'CANCELLED',
   'NO_SHOW',
@@ -185,6 +188,34 @@ export default function ReservationsPage({ params }: { params: Promise<{ venueId
   }, [reservations, searchQuery]);
 
   // Contextual actions
+  const handleArrive = async (res: AdminReservation) => {
+    setActionLoadingId(res.id);
+    try {
+      await send('POST', `/admin/reservations/${res.id}/arrive`);
+      toast.success(`${res.guest.name} checked in (Arrived)`);
+      emit('reservation:changed');
+      void loadReservations();
+    } catch (e) {
+      toast.error('Could not mark as arrived', { description: apiMessage(e) });
+    } finally {
+      setActionLoadingId(null);
+    }
+  };
+
+  const handleLate = async (res: AdminReservation) => {
+    setActionLoadingId(res.id);
+    try {
+      await send('POST', `/admin/reservations/${res.id}/late`);
+      toast.warning(`${res.guest.name} marked as Running Late`);
+      emit('reservation:changed');
+      void loadReservations();
+    } catch (e) {
+      toast.error('Could not mark as late', { description: apiMessage(e) });
+    } finally {
+      setActionLoadingId(null);
+    }
+  };
+
   const handleSeat = async (res: AdminReservation) => {
     setActionLoadingId(res.id);
     try {
@@ -615,6 +646,77 @@ export default function ReservationsPage({ params }: { params: Promise<{ venueId
                             {res.status === 'CONFIRMED' ? (
                               <>
                                 <Button
+                                  variant="secondary"
+                                  size="sm"
+                                  className="h-7 px-2 text-xs"
+                                  loading={isActioning}
+                                  onClick={() => void handleArrive(res)}
+                                  title="Mark party as checked in (Arrived)"
+                                >
+                                  <UserCheck size={12} className="mr-1 text-blue-fg" /> Arrive
+                                </Button>
+                                <Button
+                                  variant="primary"
+                                  size="sm"
+                                  className="h-7 px-2.5 text-xs"
+                                  loading={isActioning}
+                                  onClick={() => void handleSeat(res)}
+                                >
+                                  <Utensils size={12} className="mr-1 text-success" /> Seat
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="h-7 px-2 text-xs text-amber-fg hover:bg-amber-soft"
+                                  disabled={isActioning}
+                                  onClick={() => void handleLate(res)}
+                                  title="Mark Running Late"
+                                >
+                                  <Clock size={12} />
+                                </Button>
+                                <Button
+                                  variant="secondary"
+                                  size="sm"
+                                  className="h-7 px-2 text-xs"
+                                  disabled={isActioning}
+                                  onClick={() => {
+                                    setReassignItem(res);
+                                    setSelectedTableId(res.table?.id ?? '');
+                                  }}
+                                  title="Reassign Table"
+                                >
+                                  <Shuffle size={12} />
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="h-7 px-2 text-xs text-amber-fg hover:bg-amber-soft"
+                                  disabled={isActioning}
+                                  onClick={() => void handleNoShow(res)}
+                                  title="Mark No-Show"
+                                >
+                                  <UserX size={12} />
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="h-7 px-2 text-xs text-red hover:bg-red-soft"
+                                  disabled={isActioning}
+                                  onClick={() => {
+                                    setReasonModalState({ reservation: res, action: 'CANCEL' });
+                                    setReasonText('');
+                                  }}
+                                  title="Cancel Booking"
+                                >
+                                  <XCircle size={12} />
+                                </Button>
+                              </>
+                            ) : null}
+
+                            {/* Contextual actions for ARRIVED */}
+                            {res.status === 'ARRIVED' ? (
+                              <>
+                                <Button
                                   variant="primary"
                                   size="sm"
                                   className="h-7 px-2.5 text-xs"
@@ -635,6 +737,44 @@ export default function ReservationsPage({ params }: { params: Promise<{ venueId
                                   title="Reassign Table"
                                 >
                                   <Shuffle size={12} />
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="h-7 px-2 text-xs text-red hover:bg-red-soft"
+                                  disabled={isActioning}
+                                  onClick={() => {
+                                    setReasonModalState({ reservation: res, action: 'CANCEL' });
+                                    setReasonText('');
+                                  }}
+                                  title="Cancel Booking"
+                                >
+                                  <XCircle size={12} />
+                                </Button>
+                              </>
+                            ) : null}
+
+                            {/* Contextual actions for LATE */}
+                            {res.status === 'LATE' ? (
+                              <>
+                                <Button
+                                  variant="secondary"
+                                  size="sm"
+                                  className="h-7 px-2 text-xs"
+                                  loading={isActioning}
+                                  onClick={() => void handleArrive(res)}
+                                  title="Party arrived after running late"
+                                >
+                                  <UserCheck size={12} className="mr-1 text-blue-fg" /> Arrived
+                                </Button>
+                                <Button
+                                  variant="primary"
+                                  size="sm"
+                                  className="h-7 px-2.5 text-xs"
+                                  loading={isActioning}
+                                  onClick={() => void handleSeat(res)}
+                                >
+                                  <Utensils size={12} className="mr-1 text-success" /> Seat
                                 </Button>
                                 <Button
                                   variant="ghost"

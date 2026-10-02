@@ -54,6 +54,20 @@ export async function createDatabase(url: string, { drop = false } = {}): Promis
 
 /** Every application table, for fast test resets. */
 export const ALL_TABLES = [
+  'crm_campaign_deliveries',
+  'crm_campaigns',
+  'crm_segments',
+  'booster_rules',
+  'vouchers',
+  'suppressions',
+  'consent_state',
+  'consent_events',
+  'wifi_devices',
+  'table_combinations',
+  'pos_adjustments',
+  'reservation_tables',
+  'turn_time_rules',
+  'waitlist_entries',
   'webhook_events', 'notifications_outbox', 'alerts', 'wifi_sessions', 'wifi_otps',
   'gift_card_ledger', 'gift_card_holds', 'gift_cards', 'loyalty_holds', 'loyalty_ledger', 'loyalty_accounts',
   'pos_void_logs', 'pos_order_items', 'pos_orders', 'reservation_events', 'reservations',

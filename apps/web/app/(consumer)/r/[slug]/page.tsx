@@ -10,7 +10,6 @@ import { CostLine, RatingChip, VenueStatus } from '@/components/consumer/venue-c
 import { hoursLabel, isOptimizableImage } from '@/components/consumer/utils';
 import { formatTime12, todayIn } from '@/lib/format';
 
-const DEFAULT_TZ = 'Asia/Kolkata';
 const DEFAULT_PARTY = 2;
 
 export async function generateMetadata({ params }: { params: Promise<{ slug: string }> }): Promise<Metadata> {
@@ -39,15 +38,11 @@ function bookingDates(timeZone: string, openDays: Set<number>): BookingDate[] {
 
 export default async function VenuePage({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
-  // Venue + today's availability in parallel (venues are in IST; re-validated against the venue tz below).
-  const [venue, initialRaw] = await Promise.all([
-    getVenue(slug),
-    getAvailability(slug, todayIn(DEFAULT_TZ), DEFAULT_PARTY).catch((): AvailabilityResponse | null => null),
-  ]);
+  const venue = await getVenue(slug);
   if (!venue) notFound();
 
-  const dates = bookingDates(venue.timezone, new Set(venue.shifts.map((s) => s.dayOfWeek)));
-  const initial = initialRaw && initialRaw.date === dates[0].date ? initialRaw : null;
+  const dates = bookingDates(venue.timezone, new Set((venue.shifts ?? []).map((s) => s.dayOfWeek)));
+  const initial = await getAvailability(slug, dates[0].date, DEFAULT_PARTY).catch((): AvailabilityResponse | null => null);
 
   return (
     <div className="mx-auto max-w-6xl px-4 sm:px-6">
@@ -86,8 +81,8 @@ export default async function VenuePage({ params }: { params: Promise<{ slug: st
             <InfoRow icon={<Clock size={15} aria-hidden />} label="Today">
               <span className="tabular-nums">{hoursLabel(venue.todayHours, formatTime12)}</span>
             </InfoRow>
-            <InfoRow icon={<span className="text-[15px] leading-none">₹</span>} label="Cost">
-              <CostLine one={venue.costForOnePaise} two={venue.costForTwoPaise} className="text-sm" />
+            <InfoRow icon={<span className="text-[15px] leading-none">{venue.currency === 'USD' ? '$' : '₹'}</span>} label="Cost">
+              <CostLine one={venue.costForOnePaise} two={venue.costForTwoPaise} currency={venue.currency} className="text-sm" />
             </InfoRow>
           </dl>
 
@@ -101,7 +96,7 @@ export default async function VenuePage({ params }: { params: Promise<{ slug: st
           ) : null}
         </div>
 
-        <div className="lg:sticky lg:top-24 lg:self-start">
+        <div className="min-w-0 lg:sticky lg:top-24 lg:self-start">
           <BookingWidget slug={venue.slug} venueName={venue.name} acceptingBookings={venue.acceptingBookings} dates={dates} initial={initial} />
         </div>
       </div>

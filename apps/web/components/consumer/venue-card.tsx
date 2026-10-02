@@ -2,7 +2,7 @@ import Image from 'next/image';
 import Link from 'next/link';
 import { Star } from 'lucide-react';
 import type { VenueCard as VenueCardDto } from '@nexora/shared';
-import { formatINR } from '@/lib/format';
+import { formatMoney, type Currency } from '@/lib/format';
 import { cn } from '@/lib/cn';
 import { Skeleton } from '@/components/ui/misc';
 import { isOptimizableImage } from './utils';
@@ -41,12 +41,12 @@ export function VenueStatus({ isOpenNow, acceptingBookings }: { isOpenNow: boole
   );
 }
 
-export function CostLine({ one, two, className }: { one: number; two: number; className?: string }) {
+export function CostLine({ one, two, currency = 'INR', className }: { one: number; two: number; currency?: Currency; className?: string }) {
   return (
     <p className={cn('text-[13px] text-gray-900 tabular-nums', className)}>
-      Cost for one <span className="font-medium text-gray-1000">{formatINR(one)}</span>
+      Cost for one <span className="font-medium text-gray-1000">{formatMoney(one, currency)}</span>
       <span aria-hidden className="px-1.5 text-gray-600">·</span>
-      for two <span className="font-medium text-gray-1000">{formatINR(two)}</span>
+      for two <span className="font-medium text-gray-1000">{formatMoney(two, currency)}</span>
     </p>
   );
 }
@@ -80,7 +80,7 @@ export function VenueCard({ venue, priority }: { venue: VenueCardDto; priority?:
           <RatingChip rating={venue.rating} count={venue.ratingCount} className="shrink-0" />
         </div>
         <p className="truncate text-[13px] text-gray-900">{venue.cuisines.join(' · ')}</p>
-        <CostLine one={venue.costForOnePaise} two={venue.costForTwoPaise} className="mt-auto pt-1" />
+        <CostLine one={venue.costForOnePaise} two={venue.costForTwoPaise} currency={venue.currency} className="mt-auto pt-1" />
       </div>
     </Link>
   );

@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { CalendarX2, Clock, Users } from 'lucide-react';
+import { CalendarX2, ChevronLeft, ChevronRight, Clock, Users } from 'lucide-react';
 import type { AvailabilityResponse, SlotAvailability } from '@nexora/shared';
 import { api, ApiRequestError } from '@/lib/api';
 import { formatTime12 } from '@/lib/format';
@@ -21,7 +21,7 @@ export interface BookingDate {
   open: boolean; // venue has shifts that weekday
 }
 
-const PARTY_OPTIONS = (['1', '2', '3', '4'] as const).map((v) => ({ value: v, label: v }));
+const PARTY_OPTIONS = (['1', '2', '3', '4', '5', '6', '7', '8'] as const).map((v) => ({ value: v, label: v }));
 const keyOf = (date: string, party: number) => `${date}|${party}`;
 
 export function BookingWidget({
@@ -86,6 +86,11 @@ export function BookingWidget({
   const refresh = useCallback(() => setVersion((v) => v + 1), []);
 
   const formRef = useRef<HTMLDivElement>(null);
+  const dateScrollRef = useRef<HTMLDivElement>(null);
+  const scrollDates = (offset: number) => {
+    dateScrollRef.current?.scrollBy({ left: offset, behavior: 'smooth' });
+  };
+
   const selectSlot = (time: string) => {
     setSelected(time);
     requestAnimationFrame(() => {
@@ -107,7 +112,7 @@ export function BookingWidget({
   const nextOpenDate = dates.find((d) => d.date > date && d.open);
 
   return (
-    <section aria-labelledby="reserve-heading" className="rounded-xl border border-border bg-background shadow-md">
+    <section aria-labelledby="reserve-heading" className="overflow-hidden rounded-xl border border-border bg-background shadow-md">
       <div className="border-b border-border px-5 py-4">
         <h2 id="reserve-heading" className="text-[15px] font-semibold tracking-tight">
           Reserve a table
@@ -115,51 +120,87 @@ export function BookingWidget({
         <p className="mt-0.5 text-[13px] text-gray-900">Free to book. {venueName} confirms each request.</p>
       </div>
 
-      <div className="space-y-5 px-5 py-5">
+      <div className="min-w-0 space-y-5 px-5 py-5">
         {/* Date chips */}
-        <fieldset>
-          <legend className="mb-2 text-[13px] font-medium text-gray-1000">Date</legend>
-          <div className="-mx-5 flex snap-x gap-2 overflow-x-auto px-5 pb-1 [scrollbar-width:none]">
-            {dates.map((d) => {
-              const active = d.date === date;
-              return (
+        <div role="group" aria-labelledby="date-heading" className="min-w-0 max-w-full">
+          <div className="mb-2 flex items-center justify-between">
+            <span id="date-heading" className="text-[13px] font-medium text-gray-1000">
+              Date
+            </span>
+            <div className="flex items-center gap-1.5">
+              <span className="text-xs text-gray-800 tabular-nums">{dateInfo.label}</span>
+              <div className="flex items-center gap-0.5">
                 <button
-                  key={d.date}
                   type="button"
-                  aria-pressed={active}
-                  aria-label={`${d.label}${d.open ? '' : ', closed'}`}
-                  onClick={() => changeDate(d.date)}
-                  className={cn(
-                    'flex h-16 w-14 shrink-0 snap-start touch-manipulation flex-col items-center justify-center rounded-lg border transition-colors duration-150',
-                    active
-                      ? 'border-gray-1000 bg-gray-1000 text-white'
-                      : 'border-border bg-background hover:border-border-strong',
-                    !d.open && !active && 'bg-background-2 text-gray-700',
-                  )}
+                  aria-label="Scroll dates left"
+                  onClick={() => scrollDates(-180)}
+                  className="inline-flex size-6 items-center justify-center rounded border border-border bg-background text-gray-700 transition-colors hover:bg-background-2 hover:text-gray-1000"
                 >
-                  <span className={cn('text-[11px] font-medium uppercase tracking-wide', active ? 'text-white/70' : 'text-gray-800')}>
-                    {d.label === 'Today' ? 'Today' : d.weekday}
-                  </span>
-                  <span className="text-lg font-semibold leading-tight tabular-nums">{d.day}</span>
-                  <span className={cn('text-[10px]', active ? 'text-white/70' : 'text-gray-800')}>{d.open ? d.month : 'Closed'}</span>
+                  <ChevronLeft size={13} aria-hidden />
                 </button>
-              );
-            })}
+                <button
+                  type="button"
+                  aria-label="Scroll dates right"
+                  onClick={() => scrollDates(180)}
+                  className="inline-flex size-6 items-center justify-center rounded border border-border bg-background text-gray-700 transition-colors hover:bg-background-2 hover:text-gray-1000"
+                >
+                  <ChevronRight size={13} aria-hidden />
+                </button>
+              </div>
+            </div>
           </div>
-        </fieldset>
+          <div className="relative -mx-5 px-5">
+            <div
+              ref={dateScrollRef}
+              className="flex snap-x gap-2 overflow-x-auto pb-1.5 pt-0.5 scroll-smooth [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden"
+            >
+              {dates.map((d) => {
+                const active = d.date === date;
+                return (
+                  <button
+                    key={d.date}
+                    type="button"
+                    aria-pressed={active}
+                    aria-label={`${d.label}${d.open ? '' : ', closed'}`}
+                    onClick={() => changeDate(d.date)}
+                    className={cn(
+                      'flex h-16 w-14 shrink-0 snap-start touch-manipulation flex-col items-center justify-center rounded-lg border transition-colors duration-150',
+                      active
+                        ? 'border-gray-1000 bg-gray-1000 text-white'
+                        : 'border-border bg-background hover:border-border-strong',
+                      !d.open && !active && 'bg-background-2 text-gray-700',
+                    )}
+                  >
+                    <span className={cn('text-[11px] font-medium uppercase tracking-wide', active ? 'text-white/70' : 'text-gray-800')}>
+                      {d.label === 'Today' ? 'Today' : d.weekday}
+                    </span>
+                    <span className="text-lg font-semibold leading-tight tabular-nums">{d.day}</span>
+                    <span className={cn('text-[10px]', active ? 'text-white/70' : 'text-gray-800')}>{d.open ? d.month : 'Closed'}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </div>
 
         {/* Party size */}
-        <div className="flex items-center justify-between gap-4">
-          <span id="party-label" className="flex items-center gap-1.5 text-[13px] font-medium text-gray-1000">
-            <Users size={14} aria-hidden className="text-gray-900" />
-            Guests
-          </span>
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <span id="party-label" className="flex items-center gap-1.5 text-[13px] font-medium text-gray-1000">
+              <Users size={14} aria-hidden className="text-gray-900" />
+              Guests
+            </span>
+            <span className="text-xs text-gray-800 tabular-nums">
+              {party} {party === 1 ? 'guest' : 'guests'}
+            </span>
+          </div>
           <Segmented
             ariaLabel="Party size"
             value={String(party) as (typeof PARTY_OPTIONS)[number]['value']}
             onChange={(v) => changeParty(Number(v))}
             options={PARTY_OPTIONS}
-            className="[&_button]:w-11 [&_button]:tabular-nums"
+            className="grid w-full grid-cols-8 p-0.5"
+            itemClassName="w-full px-0 text-center tabular-nums"
           />
         </div>
 

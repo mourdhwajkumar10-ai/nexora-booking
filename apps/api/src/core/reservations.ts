@@ -29,10 +29,13 @@ export interface ReservationRow {
   notes: string | null;
   escalated_at: Date | null;
   confirmed_at: Date | null;
+  arrived_at: Date | null;
+  late_marked_at: Date | null;
   seated_at: Date | null;
   completed_at: Date | null;
   cancelled_at: Date | null;
   cancel_reason: string | null;
+  turn_minutes: number;
   created_at: Date;
   updated_at: Date;
 }
@@ -46,6 +49,8 @@ export async function lockReservation(tx: Tx, id: string): Promise<ReservationRo
 
 const TIMESTAMP_COLUMN: Partial<Record<ReservationStatus, string>> = {
   CONFIRMED: 'confirmed_at',
+  ARRIVED: 'arrived_at',
+  LATE: 'late_marked_at',
   SEATED: 'seated_at',
   COMPLETED: 'completed_at',
   CANCELLED: 'cancelled_at',
@@ -153,10 +158,12 @@ export function toAdminReservation(r: any): AdminReservation {
     triageDeadline: r.status === 'REQUESTED' ? new Date(new Date(r.created_at).getTime() + r.triage_timeout_secs * 1000).toISOString() : null,
     createdAt: iso(r.created_at)!,
     confirmedAt: iso(r.confirmed_at),
+    arrivedAt: iso(r.arrived_at),
     seatedAt: iso(r.seated_at),
     completedAt: iso(r.completed_at),
     cancelledAt: iso(r.cancelled_at),
     cancelReason: r.cancel_reason,
+    turnMinutes: r.turn_minutes ?? Math.round((new Date(r.end_at).getTime() - new Date(r.start_at).getTime()) / 60_000),
   };
 }
 
@@ -187,7 +194,8 @@ export async function loadPublicReservation(token: string, db: Queryable = getPo
   );
   if (!r) throw notFound('Reservation');
   const local = utcToZonedParts(new Date(r.start_at), r.timezone);
-  const revealTable = ['CONFIRMED', 'SEATED', 'COMPLETED'].includes(r.status);
+  const revealTable = ['CONFIRMED', 'ARRIVED', 'LATE', 'SEATED', 'COMPLETED'].includes(r.status);
+  const turnMinutes = r.turn_minutes ?? Math.round((new Date(r.end_at).getTime() - new Date(r.start_at).getTime()) / 60_000);
   return {
     token: r.public_token,
     status: r.status,
@@ -202,7 +210,9 @@ export async function loadPublicReservation(token: string, db: Queryable = getPo
     tableNumber: revealTable ? r.table_number : null,
     createdAt: iso(r.created_at)!,
     confirmedAt: iso(r.confirmed_at),
+    arrivedAt: iso(r.arrived_at),
     cancelledAt: iso(r.cancelled_at),
     cancelReason: r.cancel_reason,
+    turnMinutes,
   };
 }

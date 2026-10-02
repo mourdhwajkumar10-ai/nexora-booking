@@ -11,3 +11,7 @@ test-results/
 *.tsbuildinfo
 next-env.d.ts
 /Restaurant*.pdf
+.agents/
+*.zip
+Restaurant-Platform-Implementation-Plan-Pack/
+*.docx.pdf

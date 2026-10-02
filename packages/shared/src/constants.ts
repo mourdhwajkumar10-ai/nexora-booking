@@ -10,15 +10,49 @@ export type FloorStatus = (typeof FLOOR_STATUSES)[number];
 export const RESERVATION_STATUSES = [
   'REQUESTED',
   'CONFIRMED',
+  'ARRIVED',
   'SEATED',
+  'LATE',
   'COMPLETED',
   'CANCELLED',
   'NO_SHOW',
 ] as const;
-export type ReservationStatus = (typeof RESERVATION_STATUSES)[number];
+export type CanonicalReservationStatus = (typeof RESERVATION_STATUSES)[number];
+export type ReservationStatus =
+  | 'REQUESTED'
+  | 'CONFIRMED'
+  | 'SEATED'
+  | 'COMPLETED'
+  | 'CANCELLED'
+  | 'NO_SHOW'
+  | (string & {});
 
-/** Statuses that hold table inventory (PRD: Requested, Confirmed, Seated). */
-export const ACTIVE_RESERVATION_STATUSES: readonly ReservationStatus[] = ['REQUESTED', 'CONFIRMED', 'SEATED'];
+/** Statuses that hold table inventory (BR-08). */
+export const ACTIVE_RESERVATION_STATUSES: readonly ReservationStatus[] = [
+  'REQUESTED',
+  'CONFIRMED',
+  'ARRIVED',
+  'SEATED',
+  'LATE',
+];
+
+export const TERMINAL_RESERVATION_STATUSES: readonly ReservationStatus[] = [
+  'COMPLETED',
+  'CANCELLED',
+  'NO_SHOW',
+];
+
+export function toUpperReservationStatus(status: string): ReservationStatus {
+  const upper = status.toUpperCase();
+  if (!(RESERVATION_STATUSES as readonly string[]).includes(upper)) {
+    throw new Error(`Invalid reservation status: ${status}`);
+  }
+  return upper as ReservationStatus;
+}
+
+export function toLowerReservationStatus(status: string): string {
+  return status.toLowerCase();
+}
 
 export const RESERVATION_SOURCES = ['ONLINE', 'PHONE', 'WALK_IN'] as const;
 export type ReservationSource = (typeof RESERVATION_SOURCES)[number];
@@ -40,7 +74,19 @@ export type StaffRole = (typeof STAFF_ROLES)[number];
 export const TIER_LEVELS = ['BASE', 'MEMBER', 'REGULAR', 'FRIENDS_AND_FAMILY'] as const;
 export type TierLevel = (typeof TIER_LEVELS)[number];
 
-export const LEDGER_EVENTS = ['ACCRUAL', 'REDEMPTION', 'PRELOAD', 'REVERSAL', 'EXPIRED'] as const;
+export const LEDGER_EVENTS = [
+  'ACCRUAL',
+  'REDEMPTION',
+  'PRELOAD',
+  'REVERSAL',
+  'EXPIRED',
+  'REDEEM_HOLD',
+  'REDEEM_CAPTURE',
+  'REDEEM_RELEASE',
+  'EARN_PENDING',
+  'EARN_SETTLE',
+  'WRITEOFF',
+] as const;
 export type LedgerEvent = (typeof LEDGER_EVENTS)[number];
 
 export const LEDGER_STATES = ['PENDING', 'SETTLED', 'REVERSED', 'REDEEMED'] as const;
@@ -62,6 +108,25 @@ export const VOID_REASONS = [
 ] as const;
 export type VoidReason = (typeof VOID_REASONS)[number];
 
+export const ATTRIBUTION_CLASSES = [
+  'GUEST',
+  'KITCHEN',
+  'SERVER_ENTRY',
+  'PROMOTIONAL',
+  'SYSTEM',
+  'UNMAPPED',
+] as const;
+export type AttributionClass = (typeof ATTRIBUTION_CLASSES)[number];
+
+export const DEFAULT_VOID_REASON_MAPPINGS: Record<VoidReason, AttributionClass> = {
+  GUEST_REJECTED: 'GUEST',
+  PREPARATION_DEFECT: 'KITCHEN',
+  PROMOTIONAL_COMP: 'PROMOTIONAL',
+  SPILL: 'SERVER_ENTRY',
+  KITCHEN_ERROR: 'KITCHEN',
+  BILLING_ERROR: 'SERVER_ENTRY',
+};
+
 export const MENU_CATEGORIES = ['STARTER', 'ENTREE', 'DESSERT', 'BEVERAGE', 'WINE', 'PREMIUM'] as const;
 export type MenuCategory = (typeof MENU_CATEGORIES)[number];
 
@@ -74,7 +139,7 @@ export const DEFAULT_TRIAGE_TIMEOUT_SECS = 300;
 export const DWELL_RED_EXTRA_MINS = 15;
 /** Walk-ins realistically overstay: collision window = turnaround + this buffer (CRITIQUE #17). */
 export const WALK_IN_BUFFER_MINS = 15;
-export const MAX_PARTY_SIZE = 4;
+export const MAX_PARTY_SIZE = 8;
 export const MIN_PARTY_SIZE = 1;
 export const GIFT_CARD_HOLD_SECS = 120;
 export const POINTS_PER_RUPEE_UNIT = 100; // 100 points = ₹1

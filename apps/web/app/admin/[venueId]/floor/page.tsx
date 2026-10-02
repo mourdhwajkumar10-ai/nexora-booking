@@ -2,13 +2,14 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import type { FloorSnapshot, FloorStatus, FloorTable } from '@nexora/shared';
-import { adminApi, apiMessage } from '@/components/admin/admin-api';
+import { adminApi, apiMessage, send } from '@/components/admin/admin-api';
 import { useConsole } from '@/components/admin/console-provider';
+import { toast } from 'sonner';
 import { TableTile } from '@/components/admin/floor/table-tile';
 import { WalkInDialog } from '@/components/admin/floor/walk-in-dialog';
 import { TableStatusDialog } from '@/components/admin/floor/table-status-dialog';
 import { OrderDrawer } from '@/components/admin/order-drawer';
-import { Badge, Button, Card, CardBody, Input, Spinner } from '@/components/ui';
+import { Badge, Button, Card, CardBody, Dialog, Input, Spinner } from '@/components/ui';
 import {
   Armchair,
   CheckCircle2,
@@ -18,7 +19,9 @@ import {
   Plus,
   RefreshCw,
   Search,
+  Shuffle,
   Sparkles,
+  UserCheck,
   Users,
   UtensilsCrossed,
 } from 'lucide-react';
@@ -35,7 +38,7 @@ const ZONE_LABELS: Record<string, string> = {
 };
 
 export default function FloorPlanPage() {
-  const { venueId, subscribe } = useConsole();
+  const { venueId, subscribe, emit } = useConsole();
 
   const [snapshot, setSnapshot] = useState<FloorSnapshot | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
@@ -55,6 +58,39 @@ export default function FloorPlanPage() {
 
   const [orderDrawerOpen, setOrderDrawerOpen] = useState<boolean>(false);
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
+
+  // Reassign Modal State
+  const [reassignModalOpen, setReassignModalOpen] = useState<boolean>(false);
+  const [reassignTable, setReassignTable] = useState<FloorTable | null>(null);
+  const [reassignTargetId, setReassignTargetId] = useState<string>('');
+  const [submittingReassign, setSubmittingReassign] = useState<boolean>(false);
+
+  function handleOpenReassign(table: FloorTable) {
+    setReassignTable(table);
+    setReassignTargetId('');
+    setReassignModalOpen(true);
+  }
+
+  async function handleConfirmReassign() {
+    if (!reassignTable?.next?.reservationId || !reassignTargetId) return;
+    setSubmittingReassign(true);
+    try {
+      await send('POST', `/admin/reservations/${reassignTable.next.reservationId}/reassign`, {
+        tableId: reassignTargetId,
+      });
+      const targetTable = snapshot?.tables.find((t) => t.id === reassignTargetId);
+      toast.success(`Reassigned ${reassignTable.next.guestName} to Table ${targetTable?.tableNumber ?? ''}`);
+      setReassignModalOpen(false);
+      setReassignTable(null);
+      emit('reservation:changed');
+      emit('floor:changed');
+      void loadFloor();
+    } catch (e) {
+      toast.error('Reassignment failed', { description: apiMessage(e) });
+    } finally {
+      setSubmittingReassign(false);
+    }
+  }
 
   const loadFloor = useCallback(
     async (isManualRefresh = false) => {
@@ -89,6 +125,23 @@ export default function FloorPlanPage() {
   function handleOpenWalkIn(table?: FloorTable) {
     setWalkInTable(table ?? null);
     setWalkInOpen(true);
+  }
+
+  // Handle seat reservation directly from reserved table
+  async function handleSeatReservation(table: FloorTable) {
+    if (table.next?.reservationId) {
+      try {
+        await send('POST', `/admin/reservations/${table.next.reservationId}/seat`);
+        toast.success(`Seated ${table.next.guestName || 'guest'} at Table ${table.tableNumber}`);
+        emit('reservation:changed');
+        emit('floor:changed');
+        void loadFloor();
+      } catch (e) {
+        toast.error('Failed to seat reservation', { description: apiMessage(e) });
+      }
+    } else {
+      handleOpenWalkIn(table);
+    }
   }
 
   // Handle open status modal
@@ -154,6 +207,41 @@ export default function FloorPlanPage() {
   const covers = snapshot?.covers ?? { seated: 0, capacity: 0 };
   const occupancyPct = covers.capacity > 0 ? Math.round((covers.seated / covers.capacity) * 100) : 0;
 
+  // Unique arrived guests waiting for tables
+  const arrivedGuests = useMemo(() => {
+    if (!snapshot) return [];
+    const map = new Map<
+      string,
+      {
+        reservationId: string;
+        guestName: string;
+        partySize: number;
+        startAt: string;
+        tableId: string;
+        tableNumber: string;
+        tableStatus: FloorStatus;
+        currentGuestName?: string;
+      }
+    >();
+    for (const t of snapshot.tables) {
+      if (t.next && t.next.status === 'ARRIVED') {
+        if (!map.has(t.next.reservationId)) {
+          map.set(t.next.reservationId, {
+            reservationId: t.next.reservationId,
+            guestName: t.next.guestName,
+            partySize: t.next.partySize,
+            startAt: t.next.startAt,
+            tableId: t.id,
+            tableNumber: t.tableNumber,
+            tableStatus: t.floorStatus,
+            currentGuestName: t.current?.guestName,
+          });
+        }
+      }
+    }
+    return Array.from(map.values());
+  }, [snapshot]);
+
   return (
     <div className="space-y-6">
       {/* Top Header: KPI cards + Actions */}
@@ -189,6 +277,80 @@ export default function FloorPlanPage() {
           </Button>
         </div>
       </div>
+
+      {/* Arrived Guests Waiting Notice */}
+      {arrivedGuests.length > 0 && (
+        <div className="rounded-xl border border-emerald-300 bg-emerald-50/90 p-4 shadow-sm">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <span className="relative flex size-2.5">
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75"></span>
+                <span className="relative inline-flex size-2.5 rounded-full bg-emerald-500"></span>
+              </span>
+              <h2 className="text-sm font-bold text-emerald-950">
+                {arrivedGuests.length} Arrived {arrivedGuests.length === 1 ? 'Guest Waiting at Front Desk' : 'Guests Waiting'}
+              </h2>
+            </div>
+            <Badge tone="green" className="font-semibold text-xs">
+              {arrivedGuests.length} Checked In
+            </Badge>
+          </div>
+          <div className="mt-3 divide-y divide-emerald-200/60 rounded-lg border border-emerald-200 bg-white">
+            {arrivedGuests.map((g) => {
+              const assignedT = tables.find((t) => t.id === g.tableId);
+              return (
+                <div key={g.reservationId} className="flex flex-col gap-2 p-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-bold text-gray-1000">{g.guestName}</span>
+                      <span className="inline-flex items-center gap-1 rounded bg-gray-100 px-1.5 py-0.5 text-xs font-medium text-gray-800 tabular">
+                        <Users size={12} /> {g.partySize} guests
+                      </span>
+                      <Badge tone="accent" className="text-xs font-semibold">
+                        Table {g.tableNumber}
+                      </Badge>
+                    </div>
+                    <p className="mt-1 text-xs text-gray-700">
+                      Reserved for {new Date(g.startAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} ·{' '}
+                      {g.tableStatus === 'AVAILABLE' ? (
+                        <span className="font-semibold text-emerald-700">Table {g.tableNumber} is clean & ready to seat!</span>
+                      ) : (
+                        <span className="text-amber-700 font-medium">
+                          Table {g.tableNumber} is currently occupied ({g.currentGuestName || 'Seated'})
+                        </span>
+                      )}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {assignedT && (
+                      <Button
+                        variant="primary"
+                        size="sm"
+                        onClick={() => handleSeatReservation(assignedT)}
+                        className="text-xs bg-emerald-600 hover:bg-emerald-700 text-white"
+                      >
+                        <UserCheck size={13} className="mr-1.5" />
+                        Seat at Table {g.tableNumber}
+                      </Button>
+                    )}
+                    {assignedT && (
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => handleOpenReassign(assignedT)}
+                        className="text-xs"
+                      >
+                        <Shuffle size={13} className="mr-1.5" />
+                        Reassign Table
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Summary KPI Strip */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
@@ -382,15 +544,16 @@ export default function FloorPlanPage() {
                 </div>
 
                 {/* Tables Grid */}
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
                   {zoneTables.map((table) => (
                     <TableTile
                       key={table.id}
                       table={table}
                       onSeatWalkIn={handleOpenWalkIn}
-                      onSeatReservation={handleOpenWalkIn}
+                      onSeatReservation={handleSeatReservation}
                       onOpenStatusModal={handleOpenStatusModal}
                       onViewOrder={handleViewOrder}
+                      onReassign={handleOpenReassign}
                       onRefresh={loadFloor}
                     />
                   ))}
@@ -426,6 +589,62 @@ export default function FloorPlanPage() {
         venueId={venueId}
         onOrderUpdated={loadFloor}
       />
+
+      {/* Reassign Reservation Modal */}
+      <Dialog
+        open={reassignModalOpen}
+        onClose={() => setReassignModalOpen(false)}
+        title="Reassign Table"
+        description={
+          reassignTable?.next
+            ? `Move ${reassignTable.next.guestName} (${reassignTable.next.partySize} guests) from Table ${reassignTable.tableNumber} to another dining table.`
+            : 'Select a destination table for this reservation.'
+        }
+        footer={
+          <>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => setReassignModalOpen(false)}
+              disabled={submittingReassign}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="primary"
+              size="sm"
+              loading={submittingReassign}
+              disabled={!reassignTargetId}
+              onClick={() => void handleConfirmReassign()}
+            >
+              Confirm Reassignment
+            </Button>
+          </>
+        }
+      >
+        <div className="space-y-4 pt-2">
+          <div>
+            <label htmlFor="reassign-target" className="mb-1 block text-xs font-semibold text-gray-800">
+              Select Destination Table
+            </label>
+            <select
+              id="reassign-target"
+              value={reassignTargetId}
+              onChange={(e) => setReassignTargetId(e.target.value)}
+              className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-gray-1000 focus:border-accent focus:outline-none"
+            >
+              <option value="">-- Choose an available table --</option>
+              {tables
+                .filter((t) => t.id !== reassignTable?.id && t.floorStatus !== 'BLOCKED')
+                .map((t) => (
+                  <option key={t.id} value={t.id}>
+                    Table {t.tableNumber} ({t.diningZone} · {t.minCapacity}–{t.maxCapacity} covers) — {t.floorStatus}
+                  </option>
+                ))}
+            </select>
+          </div>
+        </div>
+      </Dialog>
     </div>
   );
 }

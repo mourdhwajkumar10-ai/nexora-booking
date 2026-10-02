@@ -22,6 +22,7 @@ import { api, ApiRequestError, errorMessage } from '@/lib/api';
 import { formatDateShort, formatTime12 } from '@/lib/format';
 import { getSocket } from '@/lib/socket';
 import { cn } from '@/lib/cn';
+import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Badge, type BadgeTone } from '@/components/ui/badge';
 import { Card, CardBody, CardHeader, CardTitle } from '@/components/ui/card';
@@ -29,24 +30,25 @@ import { Dialog } from '@/components/ui/dialog';
 import { Input, Label } from '@/components/ui/input';
 import { icsDataUrl, isOptimizableImage } from '@/components/consumer/utils';
 
-const PROGRESS_STEPS: { status: ReservationStatus; title: string; subtitle: string }[] = [
-  { status: 'REQUESTED', title: 'Request submitted', subtitle: 'Awaiting host confirmation' },
-  { status: 'CONFIRMED', title: 'Confirmed', subtitle: 'Table held for your party' },
-  { status: 'SEATED', title: 'Seated', subtitle: 'Welcome to your table' },
-  { status: 'COMPLETED', title: 'Completed', subtitle: 'Hope you enjoyed your visit' },
+const STANDARD_STEPS = [
+  { status: 'REQUESTED', title: 'Request submitted', subtitle: 'Awaiting host confirmation', isWarning: false },
+  { status: 'CONFIRMED', title: 'Confirmed', subtitle: 'Table held for your party', isWarning: false },
+  { status: 'ARRIVED', title: 'Arrived', subtitle: 'Checked in with the host desk', isWarning: false },
+  { status: 'SEATED', title: 'Seated', subtitle: 'Welcome to your table', isWarning: false },
+  { status: 'COMPLETED', title: 'Completed', subtitle: 'Hope you enjoyed your visit', isWarning: false },
 ];
 
-const STATUS_ORDER: Record<ReservationStatus, number> = {
-  REQUESTED: 0,
-  CONFIRMED: 1,
-  SEATED: 2,
-  COMPLETED: 3,
-  CANCELLED: -1,
-  NO_SHOW: -1,
-};
+const LATE_STEPS = [
+  { status: 'REQUESTED', title: 'Request submitted', subtitle: 'Awaiting host confirmation', isWarning: false },
+  { status: 'CONFIRMED', title: 'Confirmed', subtitle: 'Reservation held', isWarning: false },
+  { status: 'LATE', title: 'Running Late', subtitle: '15m grace window active', isWarning: true },
+  { status: 'ARRIVED', title: 'Arrived', subtitle: 'Checked in with host desk', isWarning: false },
+  { status: 'SEATED', title: 'Seated', subtitle: 'Welcome to your table', isWarning: false },
+  { status: 'COMPLETED', title: 'Completed', subtitle: 'Hope you enjoyed your visit', isWarning: false },
+];
 
 const STATUS_PILL_CONFIG: Record<
-  ReservationStatus,
+  string,
   { label: string; tone: BadgeTone; description: string }
 > = {
   REQUESTED: {
@@ -58,6 +60,16 @@ const STATUS_PILL_CONFIG: Record<
     label: 'Confirmed',
     tone: 'green',
     description: 'Your table has been reserved. Please arrive on time.',
+  },
+  ARRIVED: {
+    label: 'Arrived at Desk',
+    tone: 'blue',
+    description: 'You have checked in at the restaurant. Your table is being readied.',
+  },
+  LATE: {
+    label: 'Running Late',
+    tone: 'amber',
+    description: 'We notice your party is running late. Your table is being held during our grace window.',
   },
   SEATED: {
     label: 'Seated',
@@ -94,11 +106,44 @@ export function BookingTrackerClient({
   const [phoneLast4, setPhoneLast4] = useState('');
   const [cancelError, setCancelError] = useState<string | null>(null);
   const [cancelPending, startCancelTransition] = useTransition();
+  const [actionLoading, setActionLoading] = useState<string | null>(null);
+
+  const handleGuestArrive = async () => {
+    setActionLoading('arrive');
+    try {
+      const updated = await api<PublicReservation>(`/reservations/${token}/arrive`, { method: 'POST' });
+      setReservation(updated);
+      toast.success('Welcome! You have checked in at the restaurant.');
+    } catch (err) {
+      toast.error('Check-in failed', { description: errorMessage(err) });
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const handleGuestLate = async () => {
+    setActionLoading('late');
+    try {
+      const updated = await api<PublicReservation>(`/reservations/${token}/late`, { method: 'POST' });
+      setReservation(updated);
+      toast.warning('Host notified that you are running late. Your table is held.');
+    } catch (err) {
+      toast.error('Could not notify host', { description: errorMessage(err) });
+    } finally {
+      setActionLoading(null);
+    }
+  };
 
   const currentStatus = reservation.status;
   const isCancelledOrDeclined = currentStatus === 'CANCELLED' || currentStatus === 'NO_SHOW';
-  const canCancel = currentStatus === 'REQUESTED' || currentStatus === 'CONFIRMED';
-  const currentIndex = STATUS_ORDER[currentStatus] ?? -1;
+  const canCancel = currentStatus === 'REQUESTED' || currentStatus === 'CONFIRMED' || currentStatus === 'LATE';
+
+  const isLate = currentStatus === 'LATE';
+  const steps = isLate ? LATE_STEPS : STANDARD_STEPS;
+  const orderMap: Record<string, number> = isLate
+    ? { REQUESTED: 0, CONFIRMED: 1, LATE: 2, ARRIVED: 3, SEATED: 4, COMPLETED: 5, CANCELLED: -1, NO_SHOW: -1 }
+    : { REQUESTED: 0, CONFIRMED: 1, ARRIVED: 2, SEATED: 3, COMPLETED: 4, CANCELLED: -1, NO_SHOW: -1 };
+  const currentIndex = orderMap[currentStatus] ?? -1;
 
   // Real-time updates via Socket.IO + Polling Fallback (10s)
   useEffect(() => {
@@ -263,20 +308,63 @@ export function BookingTrackerClient({
           <p className="mt-1.5 text-sm text-gray-900">{statusConfig.description}</p>
         </div>
 
-        {canCancel && (
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={() => {
-              setCancelError(null);
-              setPhoneLast4('');
-              setCancelModalOpen(true);
-            }}
-            className="self-start text-red-fg hover:border-red/40 hover:bg-red-soft sm:self-center"
-          >
-            Cancel reservation
-          </Button>
-        )}
+        <div className="flex flex-wrap items-center gap-2 self-start sm:self-center">
+          {currentStatus === 'CONFIRMED' && (
+            <>
+              <Button
+                variant="secondary"
+                size="sm"
+                loading={actionLoading === 'late'}
+                onClick={handleGuestLate}
+                className="text-amber-fg hover:border-amber/40 hover:bg-amber-soft text-xs"
+                title="Notify host you are running up to 15 minutes late"
+              >
+                <Clock size={13} className="mr-1" />
+                Running Late (+15m)
+              </Button>
+              <Button
+                variant="primary"
+                size="sm"
+                loading={actionLoading === 'arrive'}
+                onClick={handleGuestArrive}
+                className="text-xs"
+                title="Contactless arrival check-in"
+              >
+                <CheckCircle2 size={13} className="mr-1" />
+                Check In (I'm Here)
+              </Button>
+            </>
+          )}
+
+          {currentStatus === 'LATE' && (
+            <Button
+              variant="primary"
+              size="sm"
+              loading={actionLoading === 'arrive'}
+              onClick={handleGuestArrive}
+              className="bg-amber-fg hover:bg-amber-fg/90 text-white text-xs"
+              title="Check in at the host desk now"
+            >
+              <CheckCircle2 size={13} className="mr-1" />
+              Check In (I'm Here)
+            </Button>
+          )}
+
+          {canCancel && (
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => {
+                setCancelError(null);
+                setPhoneLast4('');
+                setCancelModalOpen(true);
+              }}
+              className="text-red-fg hover:border-red/40 hover:bg-red-soft sm:self-center text-xs"
+            >
+              Cancel reservation
+            </Button>
+          )}
+        </div>
       </div>
 
       {/* Cancelled / Declined Alert Banner */}
@@ -311,14 +399,48 @@ export function BookingTrackerClient({
         </div>
       )}
 
+      {/* Running Late Grace Period Banner */}
+      {currentStatus === 'LATE' && (
+        <div className="mb-8 rounded-xl border border-amber/30 bg-amber-soft/20 p-5 text-gray-1000">
+          <div className="flex items-start gap-3">
+            <AlertCircle className="mt-0.5 size-5 shrink-0 text-amber-fg" />
+            <div className="flex-1">
+              <h2 className="text-[15px] font-semibold text-amber-fg">
+                Grace Period Active (15 Minutes)
+              </h2>
+              <p className="mt-1 text-sm text-gray-900">
+                You are marked as running late. The restaurant is holding your table during our grace period. When you arrive, tap the button below or let the host desk know.
+              </p>
+              <div className="mt-4 flex gap-3">
+                <Button
+                  variant="primary"
+                  size="sm"
+                  loading={actionLoading === 'arrive'}
+                  onClick={handleGuestArrive}
+                  className="bg-amber-fg hover:bg-amber-fg/90 text-white text-xs"
+                >
+                  <CheckCircle2 size={14} className="mr-1.5" />
+                  I Have Arrived at the Restaurant
+                </Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Status Timeline */}
       {!isCancelledOrDeclined && (
         <Card className="mb-8 border-border bg-background p-6">
           <h2 className="text-xs font-semibold uppercase tracking-wider text-gray-800">
             Progress Timeline
           </h2>
-          <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-4">
-            {PROGRESS_STEPS.map((step, idx) => {
+          <div
+            className={cn(
+              'mt-6 grid grid-cols-1 gap-4',
+              isLate ? 'sm:grid-cols-6' : 'sm:grid-cols-5',
+            )}
+          >
+            {steps.map((step, idx) => {
               const isPast = currentIndex > idx;
               const isCurrent = currentIndex === idx;
               const isFuture = currentIndex < idx;
@@ -326,7 +448,7 @@ export function BookingTrackerClient({
               return (
                 <div key={step.status} className="relative flex flex-col items-start sm:items-center text-left sm:text-center">
                   {/* Step Connector Line */}
-                  {idx < PROGRESS_STEPS.length - 1 && (
+                  {idx < steps.length - 1 && (
                     <div
                       aria-hidden
                       className={cn(
@@ -340,12 +462,19 @@ export function BookingTrackerClient({
                   <div
                     className={cn(
                       'relative z-10 flex size-8 items-center justify-center rounded-full text-xs font-semibold transition-all duration-200',
-                      isPast && 'bg-success text-white ring-4 ring-success-soft',
-                      isCurrent && 'bg-gray-1000 text-white ring-4 ring-gray-100',
+                      step.isWarning && isCurrent && 'bg-amber text-white ring-4 ring-amber-soft animate-alert-pulse',
+                      !step.isWarning && isPast && 'bg-success text-white ring-4 ring-success-soft',
+                      !step.isWarning && isCurrent && 'bg-gray-1000 text-white ring-4 ring-gray-100',
                       isFuture && 'bg-gray-100 text-gray-700 border border-border'
                     )}
                   >
-                    {isPast ? <CheckCircle2 size={16} /> : <span>{idx + 1}</span>}
+                    {step.isWarning && isCurrent ? (
+                      <AlertCircle size={16} />
+                    ) : isPast ? (
+                      <CheckCircle2 size={16} />
+                    ) : (
+                      <span>{idx + 1}</span>
+                    )}
                   </div>
 
                   {/* Step Texts */}
@@ -353,7 +482,13 @@ export function BookingTrackerClient({
                     <p
                       className={cn(
                         'text-xs font-semibold tracking-tight',
-                        isCurrent ? 'text-gray-1000' : isPast ? 'text-gray-900' : 'text-gray-700'
+                        step.isWarning && isCurrent
+                          ? 'text-amber-fg font-bold'
+                          : isCurrent
+                          ? 'text-gray-1000'
+                          : isPast
+                          ? 'text-gray-900'
+                          : 'text-gray-700'
                       )}
                     >
                       {step.title}

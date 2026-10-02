@@ -18,6 +18,7 @@ import { guestsModule } from './modules/guests';
 import { wifiModule } from './modules/wifi';
 import { posModule } from './modules/pos';
 import { loyaltyModule } from './modules/loyalty';
+import { crmModule } from './modules/crm';
 
 export const MODULES: NexoraModule[] = [
   authModule,
@@ -29,6 +30,7 @@ export const MODULES: NexoraModule[] = [
   wifiModule,
   posModule,
   loyaltyModule,
+  crmModule,
 ];
 
 export async function buildApp(opts: { logger?: boolean } = {}): Promise<FastifyInstance> {

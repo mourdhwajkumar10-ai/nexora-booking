@@ -1,4 +1,4 @@
-import { DWELL_RED_EXTRA_MINS, bestFitOrder } from '@nexora/shared';
+import { DWELL_RED_EXTRA_MINS, bestFitOrder, timerState } from '@nexora/shared';
 import { query, withTx, type Tx } from '../../db/pool';
 import { createAlert } from '../../core/alerts';
 import { audit } from '../../core/audit';
@@ -23,16 +23,14 @@ export const DWELL_DELAY_SMS =
 export async function runDwellMonitor(): Promise<void> {
   const now = clock.now();
   const rows = await query(
-    `SELECT r.id, r.venue_id, r.table_id, r.guest_id, r.party_size, r.seated_at,
+    `SELECT r.id, r.venue_id, r.table_id, r.guest_id, r.party_size, r.seated_at, r.turn_minutes,
             v.turnaround_mins, v.grace_period_mins, t.table_number, g.first_name, g.last_name
      FROM reservations r
      JOIN venues v ON v.id = r.venue_id
      JOIN dining_tables t ON t.id = r.table_id
      JOIN guests g ON g.id = r.guest_id
      WHERE r.status = 'SEATED' AND r.seated_at IS NOT NULL
-       AND r.seated_at + make_interval(mins => v.turnaround_mins) <= $1
      ORDER BY r.seated_at`,
-    [now],
   );
   for (const r of rows) {
     try {
@@ -44,7 +42,12 @@ export async function runDwellMonitor(): Promise<void> {
 }
 
 async function processSeating(tx: Tx, r: any, now: Date): Promise<void> {
-  const elapsedMins = Math.floor((now.getTime() - new Date(r.seated_at).getTime()) / 60_000);
+  const partySize = r.party_size ?? 2;
+  const turnMinutes = r.turn_minutes ?? (partySize <= 2 ? 75 : partySize <= 4 ? 90 : 120);
+  const timer = timerState(new Date(r.seated_at).getTime(), turnMinutes, now.getTime());
+  if (timer.level === 'normal') return;
+
+  const elapsedMins = timer.elapsedMinutes;
   const guest = guestDisplayName(r);
   const data = { reservationId: r.id, tableId: r.table_id, tableNumber: r.table_number, seatedAt: new Date(r.seated_at).toISOString() };
   await createAlert(tx, {
@@ -52,17 +55,17 @@ async function processSeating(tx: Tx, r: any, now: Date): Promise<void> {
     kind: 'DWELL_AMBER',
     severity: 'warning',
     title: `Table ${r.table_number} reached turnaround`,
-    body: `${guest} (party of ${r.party_size}) has been seated ${elapsedMins} min (turnaround ${r.turnaround_mins} min).`,
+    body: `${guest} (party of ${r.party_size}) has been seated ${elapsedMins} min (turnaround ${turnMinutes} min).`,
     data,
     dedupeKey: `dwell-amber:${r.id}`,
   });
-  if (elapsedMins < r.turnaround_mins + DWELL_RED_EXTRA_MINS) return;
+  if (timer.level !== 'red') return;
   const red = await createAlert(tx, {
     venueId: r.venue_id,
     kind: 'DWELL_RED',
     severity: 'critical',
     title: `Table ${r.table_number} is overstaying`,
-    body: `${guest} (party of ${r.party_size}) has been seated ${elapsedMins} min, ${elapsedMins - r.turnaround_mins} min past turnaround.`,
+    body: `${guest} (party of ${r.party_size}) has been seated ${elapsedMins} min, ${elapsedMins - turnMinutes} min past turnaround.`,
     data,
     dedupeKey: `dwell-red:${r.id}`,
   });
@@ -87,7 +90,7 @@ async function protectNextBooking(tx: Tx, seated: any, now: Date): Promise<void>
      WHERE t.venue_id = $1 AND t.archived_at IS NULL AND t.status = 'AVAILABLE' AND t.id <> $2
        AND NOT EXISTS (
          SELECT 1 FROM reservations o
-         WHERE o.table_id = t.id AND o.id <> $3 AND o.status IN ('REQUESTED', 'CONFIRMED', 'SEATED')
+         WHERE o.table_id = t.id AND o.id <> $3 AND o.status IN ('REQUESTED', 'CONFIRMED', 'ARRIVED', 'SEATED', 'LATE')
            AND o.start_at < $5 AND $4 < o.end_at
        )`,
     [seated.venue_id, seated.table_id, next.id, next.start_at, next.end_at],
@@ -105,7 +108,7 @@ async function protectNextBooking(tx: Tx, seated: any, now: Date): Promise<void>
     const target = locked.get(alt.id)!;
     if (target.status !== 'AVAILABLE') continue;
     const clash = await tx.one(
-      `SELECT 1 FROM reservations WHERE table_id = $1 AND id <> $2 AND status IN ('REQUESTED', 'CONFIRMED', 'SEATED')
+      `SELECT 1 FROM reservations WHERE table_id = $1 AND id <> $2 AND status IN ('REQUESTED', 'CONFIRMED', 'ARRIVED', 'SEATED', 'LATE')
          AND start_at < $4 AND $3 < end_at LIMIT 1`,
       [alt.id, next.id, next.start_at, next.end_at],
     );

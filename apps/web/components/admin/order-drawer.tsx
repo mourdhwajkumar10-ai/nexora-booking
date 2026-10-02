@@ -8,13 +8,22 @@ import type {
   SettleResult,
   TenderInput,
 } from '@nexora/shared';
-import { formatINR, MENU_CATEGORIES, POINTS_PER_RUPEE_UNIT } from '@nexora/shared';
+import {
+  formatINR,
+  formatMoney,
+  MENU_CATEGORIES,
+  POINTS_PER_RUPEE_UNIT,
+  VOID_REASONS,
+  DEFAULT_VOID_REASON_MAPPINGS,
+  type VoidReason,
+} from '@nexora/shared';
 import { adminApi, apiMessage, send } from './admin-api';
 import { useConsole } from './console-provider';
 import { Badge, Button, Dialog, Field, Input, Select, Sheet, StatusBadge } from '@/components/ui';
 import { toast } from 'sonner';
 import {
   AlertCircle,
+  AlertTriangle,
   ArrowRight,
   Check,
   CreditCard,
@@ -44,12 +53,19 @@ export function OrderDrawer({
   venueId,
   onOrderUpdated,
 }: OrderDrawerProps) {
-  const { emit } = useConsole();
+  const { emit, settings, me } = useConsole();
+  const currency = settings?.currency ?? 'INR';
 
   const [order, setOrder] = useState<OrderDetail | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  // Void Item Modal State
+  const [voidModalItem, setVoidModalItem] = useState<{ id: string; name: string; lineTotalPaise: number } | null>(null);
+  const [voidReason, setVoidReason] = useState<VoidReason>('KITCHEN_ERROR');
+  const [voidAuthorizedBy, setVoidAuthorizedBy] = useState('');
+  const [submittingVoid, setSubmittingVoid] = useState(false);
 
   // Menu items for add-item picker
   const [menuItems, setMenuItems] = useState<MenuItemDto[]>([]);
@@ -209,6 +225,41 @@ export function OrderDrawer({
       toast.error('Failed to remove item', { description: apiMessage(e) });
     } finally {
       setActionLoading(null);
+    }
+  }
+
+  // Fair Void Item via POS Webhook Pipeline
+  async function handleVoidItem() {
+    if (!order || !voidModalItem) return;
+    setSubmittingVoid(true);
+    try {
+      const auth = voidAuthorizedBy.trim() || me?.user?.name || 'Floor Manager';
+      await send('POST', `/admin/venues/${venueId}/pos/simulate`, {
+        body: {
+          type: 'order.item_voided',
+          eventId: `void_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+          orderId: order.id,
+          orderItemId: voidModalItem.id,
+          reason: voidReason,
+          authorizedBy: auth,
+        },
+      });
+      const attr = DEFAULT_VOID_REASON_MAPPINGS[voidReason] || 'OPERATIONS';
+      const isShielded = attr === 'KITCHEN' || attr === 'SERVER_ENTRY';
+      toast.success(`Item "${voidModalItem.name}" voided`, {
+        description: isShielded
+          ? `Attributed to ${attr}. Guest profile protected (0 penalty strikes).`
+          : `Attributed to ${attr}.`,
+      });
+      setVoidModalItem(null);
+      void loadOrder();
+      emit('order:changed');
+      emit('floor:changed');
+      onOrderUpdated?.();
+    } catch (e) {
+      toast.error('Failed to void item', { description: apiMessage(e) });
+    } finally {
+      setSubmittingVoid(false);
     }
   }
 
@@ -416,7 +467,7 @@ export function OrderDrawer({
 
                 {order.status === 'PARTIALLY_PAID' && (
                   <div className="flex w-full items-center justify-between rounded-lg bg-amber-soft px-3 py-2 text-xs text-amber-fg">
-                    <span className="font-medium">Partially Paid ({formatINR(remainingTotalPaise)} remaining)</span>
+                    <span className="font-medium">Partially Paid ({formatMoney(remainingTotalPaise, currency)} remaining)</span>
                     <Button variant="secondary" size="sm" onClick={openSettlement} className="h-7 text-xs">
                       Resume Settle
                     </Button>
@@ -592,26 +643,42 @@ export function OrderDrawer({
                       <div className="flex items-center gap-3">
                         <div className="text-right">
                           <div className={cn('font-semibold text-gray-1000 tabular', item.isVoided && 'line-through text-gray-700')}>
-                            {formatINR(item.lineTotalPaise)}
+                            {formatMoney(item.lineTotalPaise, currency)}
                           </div>
                           {item.quantity > 1 && (
                             <div className="text-[10px] text-gray-800 tabular">
-                              {formatINR(item.unitPricePaise)} ea
+                              {formatMoney(item.unitPricePaise, currency)} ea
                             </div>
                           )}
                         </div>
 
-                        {order.status === 'PLACED' && !item.isVoided && (
-                          <button
-                            type="button"
-                            onClick={() => void handleDeleteItem(item.id)}
-                            disabled={actionLoading === `del-${item.id}`}
-                            className="rounded p-1 text-gray-700 hover:text-red hover:bg-red-soft transition-colors"
-                            title="Remove item"
-                          >
-                            <Trash2 size={13} />
-                          </button>
-                        )}
+                        <div className="flex items-center gap-1">
+                          {order.status === 'PLACED' && !item.isVoided && (
+                            <button
+                              type="button"
+                              onClick={() => void handleDeleteItem(item.id)}
+                              disabled={actionLoading === `del-${item.id}`}
+                              className="rounded p-1 text-gray-700 hover:text-red hover:bg-red-soft transition-colors"
+                              title="Remove unconfirmed item"
+                            >
+                              <Trash2 size={13} />
+                            </button>
+                          )}
+
+                          {!['BILLED', 'VOIDED'].includes(order.status) && !item.isVoided && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setVoidModalItem({ id: item.id, name: item.itemName, lineTotalPaise: item.lineTotalPaise });
+                                setVoidReason('KITCHEN_ERROR');
+                              }}
+                              className="rounded p-1 text-gray-700 hover:text-amber-fg hover:bg-amber-soft transition-colors"
+                              title="Void item with Fair Attribution"
+                            >
+                              <AlertTriangle size={13} />
+                            </button>
+                          )}
+                        </div>
                       </div>
                     </div>
                   ))
@@ -626,28 +693,28 @@ export function OrderDrawer({
               </h4>
               <div className="flex justify-between text-gray-800">
                 <span>Gross Total</span>
-                <span className="tabular font-medium text-gray-1000">{formatINR(order.grossPaise)}</span>
+                <span className="tabular font-medium text-gray-1000">{formatMoney(order.grossPaise, currency)}</span>
               </div>
               {order.discountPaise > 0 ? (
                 <div className="flex justify-between text-success-fg">
                   <span>Discounts & Voids</span>
-                  <span className="tabular font-medium">-{formatINR(order.discountPaise)}</span>
+                  <span className="tabular font-medium">-{formatMoney(order.discountPaise, currency)}</span>
                 </div>
               ) : null}
               <div className="flex justify-between text-gray-800 pt-1 border-t border-border">
                 <span className="font-semibold text-gray-1000">Net Total</span>
-                <span className="tabular font-bold text-gray-1000">{formatINR(order.netPaise)}</span>
+                <span className="tabular font-bold text-gray-1000">{formatMoney(order.netPaise, currency)}</span>
               </div>
               {order.paidPaise > 0 ? (
                 <div className="flex justify-between text-blue-fg">
                   <span>Paid so far</span>
-                  <span className="tabular font-semibold">{formatINR(order.paidPaise)}</span>
+                  <span className="tabular font-semibold">{formatMoney(order.paidPaise, currency)}</span>
                 </div>
               ) : null}
               <div className="flex justify-between items-center pt-2 border-t border-border text-sm">
                 <span className="font-bold text-gray-1000">Balance Due</span>
                 <span className="tabular font-bold text-base text-gray-1000">
-                  {formatINR(remainingTotalPaise)}
+                  {formatMoney(remainingTotalPaise, currency)}
                 </span>
               </div>
             </div>
@@ -677,7 +744,7 @@ export function OrderDrawer({
           <div className="flex items-center justify-between rounded-lg bg-background-2 border border-border p-3">
             <div>
               <span className="text-[11px] text-gray-800 uppercase font-medium">Total Balance Due</span>
-              <div className="text-base font-bold text-gray-1000 tabular">{formatINR(remainingTotalPaise)}</div>
+              <div className="text-base font-bold text-gray-1000 tabular">{formatMoney(remainingTotalPaise, currency)}</div>
             </div>
             <div className="text-right">
               <span className="text-[11px] text-gray-800 uppercase font-medium">Unallocated Folio</span>
@@ -691,7 +758,7 @@ export function OrderDrawer({
                       : 'text-red-fg',
                 )}
               >
-                {formatINR(remainingFolioPaise)}
+                {formatMoney(remainingFolioPaise, currency)}
               </div>
             </div>
           </div>
@@ -773,7 +840,7 @@ export function OrderDrawer({
 
                     <div className="relative flex-1">
                       <span className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-800 text-xs">
-                        {tender.type === 'POINTS' ? 'Pts' : '₹'}
+                        {tender.type === 'POINTS' ? 'Pts' : currency === 'USD' ? '$' : '₹'}
                       </span>
                       <Input
                         type="number"
@@ -867,6 +934,114 @@ export function OrderDrawer({
             </Button>
           </div>
         </form>
+      </Dialog>
+
+      {/* Fair Void Attribution Dialog */}
+      <Dialog
+        open={Boolean(voidModalItem)}
+        onClose={() => {
+          if (!submittingVoid) setVoidModalItem(null);
+        }}
+        title="Void Item (Fair Attribution)"
+        description="Select reason to accurately categorize the defect and shield customer CRM metrics."
+        footer={
+          <div className="flex justify-end gap-2">
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() => setVoidModalItem(null)}
+              disabled={submittingVoid}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="danger"
+              loading={submittingVoid}
+              onClick={() => void handleVoidItem()}
+            >
+              Confirm Void
+            </Button>
+          </div>
+        }
+      >
+        {voidModalItem ? (
+          <div className="space-y-4">
+            <div className="rounded-lg border border-border bg-background-2 p-3 text-xs">
+              <span className="text-gray-800 block">Item to Void:</span>
+              <span className="font-semibold text-gray-1000 text-sm">{voidModalItem.name}</span>
+              <span className="text-gray-800 block mt-0.5 tabular">
+                Amount: <strong>{formatMoney(voidModalItem.lineTotalPaise, currency)}</strong>
+              </span>
+            </div>
+
+            <Field label="Void Reason Code" htmlFor="drawer-void-reason">
+              <Select
+                id="drawer-void-reason"
+                value={voidReason}
+                onChange={(e) => setVoidReason(e.target.value as VoidReason)}
+              >
+                {VOID_REASONS.map((r) => (
+                  <option key={r} value={r}>
+                    {r.replace(/_/g, ' ')} ({DEFAULT_VOID_REASON_MAPPINGS[r]})
+                  </option>
+                ))}
+              </Select>
+            </Field>
+
+            {/* Fair Void CRM Attribution Banner */}
+            {(() => {
+              const attr = DEFAULT_VOID_REASON_MAPPINGS[voidReason] || 'OPERATIONS';
+              const isKitchenOrServer = attr === 'KITCHEN' || attr === 'SERVER_ENTRY';
+              const isGuest = attr === 'GUEST';
+
+              return (
+                <div
+                  className={cn(
+                    'rounded-lg border p-3 text-xs',
+                    isKitchenOrServer
+                      ? 'border-success/30 bg-success-soft text-success-fg'
+                      : isGuest
+                        ? 'border-amber/30 bg-amber-soft text-amber-fg'
+                        : 'border-blue/30 bg-blue-soft text-blue-fg',
+                  )}
+                >
+                  <div className="flex items-center gap-2 font-semibold">
+                    <Badge
+                      tone={isKitchenOrServer ? 'green' : isGuest ? 'amber' : 'blue'}
+                      className="h-5 px-1.5 text-[10px]"
+                    >
+                      {attr}
+                    </Badge>
+                    <span>
+                      {isKitchenOrServer
+                        ? 'Guest Profile Shielded (0 Penalties)'
+                        : isGuest
+                          ? 'Attributed to Guest Return'
+                          : 'Promotional / Operational Comp'}
+                    </span>
+                  </div>
+                  <p className="mt-1.5 leading-relaxed text-[11px]">
+                    {isKitchenOrServer
+                      ? 'Staff/kitchen operational error. This void will NOT penalize the diner’s profile return counter.'
+                      : isGuest
+                        ? 'Customer preference return after kitchen firing. Increments guest profile void strikes.'
+                        : 'Manager goodwill or system adjustment. Does not count as a guest defect.'}
+                  </p>
+                </div>
+              );
+            })()}
+
+            <Field label="Authorized By" htmlFor="drawer-void-auth">
+              <Input
+                id="drawer-void-auth"
+                placeholder="e.g. Floor Manager"
+                value={voidAuthorizedBy}
+                onChange={(e) => setVoidAuthorizedBy(e.target.value)}
+              />
+            </Field>
+          </div>
+        ) : null}
       </Dialog>
     </>
   );

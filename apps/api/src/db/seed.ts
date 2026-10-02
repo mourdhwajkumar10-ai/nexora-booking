@@ -35,22 +35,33 @@ export async function seedTestFixture(db: Db): Promise<TestFixture> {
   const loc = await one(db, `INSERT INTO localities (slug, name, city) VALUES ('cyber-city','Cyber City','Gurgaon') RETURNING id`);
   const venue = await one(
     db,
-    `INSERT INTO venues (slug, name, locality_id, address, cuisines, rating, rating_count, cost_for_one_paise, cost_for_two_paise, timezone)
-     VALUES ('test-bistro','Test Bistro',$1,'DLF Phase 2',ARRAY['Italian'],4.5,120,80000,150000,$2) RETURNING id`,
+    `INSERT INTO venues (slug, name, locality_id, address, cuisines, rating, rating_count, cost_for_one_paise, cost_for_two_paise, timezone, currency, locale, reset_buffer_mins)
+     VALUES ('test-bistro','Test Bistro',$1,'DLF Phase 2',ARRAY['Italian'],4.5,120,80000,150000,$2,'INR','en-IN',15) RETURNING id`,
     [loc.id, TZ],
   );
   const other = await one(
     db,
-    `INSERT INTO venues (slug, name, locality_id, cost_for_one_paise, cost_for_two_paise) VALUES ('other-place','Other Place',$1,50000,90000) RETURNING id`,
+    `INSERT INTO venues (slug, name, locality_id, cost_for_one_paise, cost_for_two_paise, timezone, currency, locale, reset_buffer_mins) VALUES ('other-place','Other Place',$1,50000,90000,'America/New_York','USD','en-US',15) RETURNING id`,
     [loc.id],
   );
-  for (const v of [venue.id, other.id])
+  for (const v of [venue.id, other.id]) {
     for (const d of ALL_DAYS) await db.query(`INSERT INTO operating_shifts (venue_id, day_of_week, open_time, close_time) VALUES ($1,$2,'12:00','23:00')`, [v, d]);
+    await db.query(
+      `INSERT INTO turn_time_rules (venue_id, min_covers, max_covers, turn_minutes) VALUES
+       ($1, 1, 2, 75), ($1, 3, 4, 90), ($1, 5, 50, 120)`,
+      [v],
+    );
+  }
   const tables: Record<string, string> = {};
   for (const [num, min, max] of [['T-1', 1, 2], ['T-2', 1, 2], ['T-3', 2, 4], ['T-4', 2, 4]] as const) {
     const t = await one(db, `INSERT INTO dining_tables (venue_id, table_number, min_capacity, max_capacity) VALUES ($1,$2,$3,$4) RETURNING id`, [venue.id, num, min, max]);
     tables[num] = t.id;
   }
+  await db.query(
+    `INSERT INTO table_combinations (venue_id, name, min_capacity, max_capacity, table_ids, is_active)
+     VALUES ($1, 'COMB-3-4', 5, 8, ARRAY[$2::uuid, $3::uuid], true)`,
+    [venue.id, tables['T-3'], tables['T-4']],
+  );
   await db.query(`INSERT INTO dining_tables (venue_id, table_number, min_capacity, max_capacity) VALUES ($1,'O-1',1,4)`, [other.id]);
   await db.query(
     `INSERT INTO menu_items (venue_id, name, category, price_paise) VALUES
@@ -83,20 +94,22 @@ const LOCALITIES = [
   { slug: 'cyber-city-gurgaon', name: 'Cyber City', city: 'Gurgaon' },
   { slug: 'koramangala-bangalore', name: 'Koramangala', city: 'Bangalore' },
   { slug: 'bkc-mumbai', name: 'Bandra Kurla Complex', city: 'Mumbai' },
+  { slug: 'manhattan-nyc', name: 'Manhattan', city: 'New York' },
 ];
 
 const img = (id: string) => `https://images.unsplash.com/${id}?auto=format&fit=crop&w=1200&q=70`;
 
 const VENUES = [
-  { loc: 0, slug: 'ember-and-oak', name: 'Ember & Oak', cuisines: ['Modern Indian', 'Grill'], rating: 4.6, rc: 2140, one: 1400, two: 2600, img: 'photo-1517248135467-4c7edcad34c4', addr: 'DLF Cyber Hub, Tower B', desc: 'Wood-fired Indian small plates and a serious whisky list.' },
-  { loc: 0, slug: 'saffron-lane', name: 'Saffron Lane', cuisines: ['North Indian', 'Mughlai'], rating: 4.3, rc: 980, one: 900, two: 1700, img: 'photo-1555396273-367ea4eb4db5', addr: 'Cyber City, Building 10', desc: 'Slow-cooked dum biryanis and tandoor classics.' },
-  { loc: 0, slug: 'the-copper-still', name: 'The Copper Still', cuisines: ['European', 'Bar'], rating: 4.4, rc: 1530, one: 1800, two: 3400, img: 'photo-1514933651103-005eec06c04b', addr: 'Cyber Hub, Ground Floor', desc: 'Late-night cocktail bar and European bistro. Open past midnight.', late: true },
-  { loc: 1, slug: 'kinfolk-kitchen', name: 'Kinfolk Kitchen', cuisines: ['Cafe', 'Continental'], rating: 4.5, rc: 3120, one: 700, two: 1300, img: 'photo-1554118811-1e0d58224f24', addr: '80 Feet Rd, 4th Block', desc: 'All-day brunch, sourdough and single-origin coffee.' },
-  { loc: 1, slug: 'umami-house', name: 'Umami House', cuisines: ['Japanese', 'Sushi'], rating: 4.7, rc: 1890, one: 1600, two: 3000, img: 'photo-1579871494447-9811cf80d66c', addr: '5th Block, Jyoti Nivas College Rd', desc: 'Omakase counter and robata grill.' },
-  { loc: 1, slug: 'coastal-curry-co', name: 'Coastal Curry Co.', cuisines: ['South Indian', 'Seafood'], rating: 4.2, rc: 760, one: 800, two: 1500, img: 'photo-1589302168068-964664d93dc0', addr: '1st Block, Koramangala', desc: 'Mangalorean and Malabar seafood curries.' },
-  { loc: 2, slug: 'bombay-social-table', name: 'Bombay Social Table', cuisines: ['Pan-Asian', 'Bar'], rating: 4.4, rc: 2650, one: 1500, two: 2800, img: 'photo-1552566626-52f8b828add9', addr: 'G Block, BKC', desc: 'Dim sum, bao and highballs for the BKC crowd.' },
-  { loc: 2, slug: 'olive-and-thyme', name: 'Olive & Thyme', cuisines: ['Mediterranean'], rating: 4.5, rc: 1320, one: 1700, two: 3200, img: 'photo-1414235077428-338989a2e8c0', addr: 'Maker Maxity, BKC', desc: 'Mezze, wood-oven flatbreads and natural wines.' },
-  { loc: 2, slug: 'masala-library-bkc', name: 'Masala Atelier', cuisines: ['Progressive Indian'], rating: 4.8, rc: 4010, one: 2500, two: 4800, img: 'photo-1559339352-11d035aa65de', addr: 'First International Financial Centre, BKC', desc: 'Tasting menus reimagining regional Indian cuisine.' },
+  { loc: 0, slug: 'ember-and-oak', name: 'Ember & Oak', cuisines: ['Modern Indian', 'Grill'], rating: 4.6, rc: 2140, one: 1400, two: 2600, img: 'photo-1517248135467-4c7edcad34c4', addr: 'DLF Cyber Hub, Tower B', desc: 'Wood-fired Indian small plates and a serious whisky list.', currency: 'INR', locale: 'en-IN', tz: 'Asia/Kolkata', resetBufferMins: 15 },
+  { loc: 0, slug: 'saffron-lane', name: 'Saffron Lane', cuisines: ['North Indian', 'Mughlai'], rating: 4.3, rc: 980, one: 900, two: 1700, img: 'photo-1555396273-367ea4eb4db5', addr: 'Cyber City, Building 10', desc: 'Slow-cooked dum biryanis and tandoor classics.', currency: 'INR', locale: 'en-IN', tz: 'Asia/Kolkata', resetBufferMins: 15 },
+  { loc: 0, slug: 'the-copper-still', name: 'The Copper Still', cuisines: ['European', 'Bar'], rating: 4.4, rc: 1530, one: 1800, two: 3400, img: 'photo-1514933651103-005eec06c04b', addr: 'Cyber Hub, Ground Floor', desc: 'Late-night cocktail bar and European bistro. Open past midnight.', late: true, currency: 'INR', locale: 'en-IN', tz: 'Asia/Kolkata', resetBufferMins: 15 },
+  { loc: 1, slug: 'kinfolk-kitchen', name: 'Kinfolk Kitchen', cuisines: ['Cafe', 'Continental'], rating: 4.5, rc: 3120, one: 700, two: 1300, img: 'photo-1554118811-1e0d58224f24', addr: '80 Feet Rd, 4th Block', desc: 'All-day brunch, sourdough and single-origin coffee.', currency: 'INR', locale: 'en-IN', tz: 'Asia/Kolkata', resetBufferMins: 15 },
+  { loc: 1, slug: 'umami-house', name: 'Umami House', cuisines: ['Japanese', 'Sushi'], rating: 4.7, rc: 1890, one: 1600, two: 3000, img: 'photo-1579871494447-9811cf80d66c', addr: '5th Block, Jyoti Nivas College Rd', desc: 'Omakase counter and robata grill.', currency: 'INR', locale: 'en-IN', tz: 'Asia/Kolkata', resetBufferMins: 15 },
+  { loc: 1, slug: 'coastal-curry-co', name: 'Coastal Curry Co.', cuisines: ['South Indian', 'Seafood'], rating: 4.2, rc: 760, one: 800, two: 1500, img: 'photo-1589302168068-964664d93dc0', addr: '1st Block, Koramangala', desc: 'Mangalorean and Malabar seafood curries.', currency: 'INR', locale: 'en-IN', tz: 'Asia/Kolkata', resetBufferMins: 15 },
+  { loc: 2, slug: 'bombay-social-table', name: 'Bombay Social Table', cuisines: ['Pan-Asian', 'Bar'], rating: 4.4, rc: 2650, one: 1500, two: 2800, img: 'photo-1552566626-52f8b828add9', addr: 'G Block, BKC', desc: 'Dim sum, bao and highballs for the BKC crowd.', currency: 'INR', locale: 'en-IN', tz: 'Asia/Kolkata', resetBufferMins: 15 },
+  { loc: 2, slug: 'olive-and-thyme', name: 'Olive & Thyme', cuisines: ['Mediterranean'], rating: 4.5, rc: 1320, one: 1700, two: 3200, img: 'photo-1414235077428-338989a2e8c0', addr: 'Maker Maxity, BKC', desc: 'Mezze, wood-oven flatbreads and natural wines.', currency: 'INR', locale: 'en-IN', tz: 'Asia/Kolkata', resetBufferMins: 15 },
+  { loc: 2, slug: 'masala-library-bkc', name: 'Masala Atelier', cuisines: ['Progressive Indian'], rating: 4.8, rc: 4010, one: 2500, two: 4800, img: 'photo-1559339352-11d035aa65de', addr: 'First International Financial Centre, BKC', desc: 'Tasting menus reimagining regional Indian cuisine.', currency: 'INR', locale: 'en-IN', tz: 'Asia/Kolkata', resetBufferMins: 15 },
+  { loc: 3, slug: 'hudson-river-grill', name: 'Hudson River Grill', cuisines: ['American', 'Steakhouse'], rating: 4.7, rc: 1820, one: 45, two: 90, img: 'photo-1544025162-d76694265947', addr: 'Pier 57, Hudson River Park', desc: 'Prime dry-aged steaks, fresh Atlantic seafood, and skyline views.', currency: 'USD', locale: 'en-US', tz: 'America/New_York', resetBufferMins: 15 },
 ];
 
 const MENU: [string, string, number][] = [
@@ -105,6 +118,14 @@ const MENU: [string, string, number][] = [
   ['Truffle Mushroom Risotto', 'ENTREE', 895], ['Fresh Oysters (6)', 'PREMIUM', 1850], ['Gulab Jamun Cheesecake', 'DESSERT', 395],
   ['Fresh Lime Soda', 'BEVERAGE', 195], ['Cold Brew', 'BEVERAGE', 245], ['Cabernet Sauvignon (glass)', 'WINE', 950],
   ['Barolo 2018 (bottle)', 'WINE', 9500],
+];
+
+const US_MENU: [string, string, number][] = [
+  ['Jumbo Lump Crab Cake', 'STARTER', 24], ['Caesar Salad', 'STARTER', 18], ['French Onion Soup', 'STARTER', 16],
+  ['Prime Bone-In Ribeye (16oz)', 'PREMIUM', 68], ['Filet Mignon (8oz)', 'ENTREE', 56], ['Pan-Seared Chilean Sea Bass', 'ENTREE', 48],
+  ['Truffle Mac & Cheese', 'STARTER', 18], ['New York Cheesecake', 'DESSERT', 14], ['Warm Chocolate Cake', 'DESSERT', 14],
+  ['Sparkling Water', 'BEVERAGE', 8], ['Espresso', 'BEVERAGE', 6], ['Napa Cabernet Sauvignon (glass)', 'WINE', 22],
+  ['Silver Oak Cabernet 2018 (bottle)', 'WINE', 185],
 ];
 
 const GUESTS = [
@@ -129,15 +150,19 @@ export async function seedDemo(db: Db): Promise<void> {
 
   const venueIds: string[] = [];
   for (const v of VENUES) {
+    const currency = (v as any).currency ?? 'INR';
+    const locale = (v as any).locale ?? 'en-IN';
+    const tz = (v as any).tz ?? TZ;
+    const resetBufferMins = (v as any).resetBufferMins ?? 15;
     const row = await one(
       db,
-      `INSERT INTO venues (slug, name, locality_id, address, description, cuisines, rating, rating_count, image_url, cost_for_one_paise, cost_for_two_paise, timezone)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id`,
-      [v.slug, v.name, locIds[v.loc], v.addr, v.desc, v.cuisines, v.rating, v.rc, img(v.img), v.one * 100, v.two * 100, TZ],
+      `INSERT INTO venues (slug, name, locality_id, address, description, cuisines, rating, rating_count, image_url, cost_for_one_paise, cost_for_two_paise, timezone, currency, locale, reset_buffer_mins)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING id`,
+      [v.slug, v.name, locIds[v.loc], v.addr, v.desc, v.cuisines, v.rating, v.rc, img(v.img), v.one * 100, v.two * 100, tz, currency, locale, resetBufferMins],
     );
     venueIds.push(row.id);
     for (const d of ALL_DAYS) {
-      if (v.late) {
+      if ((v as any).late) {
         await db.query(`INSERT INTO operating_shifts (venue_id, day_of_week, open_time, close_time) VALUES ($1,$2,'18:00','01:00')`, [row.id, d]);
       } else {
         await db.query(`INSERT INTO operating_shifts (venue_id, day_of_week, open_time, close_time) VALUES ($1,$2,'09:00','16:00'),($1,$2,'18:00','23:30')`, [row.id, d]);
@@ -153,23 +178,51 @@ export async function seedDemo(db: Db): Promise<void> {
         row.id, num, zone === 'WINDOW' ? 'MAIN' : zone, min, max,
       ]);
     }
-    for (const [i, [name, cat, price]] of MENU.entries()) {
+    const menuItems = currency === 'USD' ? US_MENU : MENU;
+    for (const [i, [name, cat, price]] of menuItems.entries()) {
       await db.query('INSERT INTO menu_items (venue_id, name, category, price_paise, sort_order) VALUES ($1,$2,$3,$4,$5)', [row.id, name, cat, price * 100, i]);
     }
+    await db.query(
+      `INSERT INTO turn_time_rules (venue_id, min_covers, max_covers, turn_minutes) VALUES
+       ($1, 1, 2, 75), ($1, 3, 4, 90), ($1, 5, 50, 120)`,
+      [row.id],
+    );
+    const t5 = (await db.query('SELECT id FROM dining_tables WHERE venue_id = $1 AND table_number = $2', [row.id, 'T-5'])).rows[0]?.id;
+    const t6 = (await db.query('SELECT id FROM dining_tables WHERE venue_id = $1 AND table_number = $2', [row.id, 'T-6'])).rows[0]?.id;
+    if (t5 && t6) {
+      await db.query(
+        `INSERT INTO table_combinations (venue_id, name, min_capacity, max_capacity, table_ids, is_active)
+         VALUES ($1, 'COMB-5-6', 5, 8, ARRAY[$2::uuid, $3::uuid], true)`,
+        [row.id, t5, t6],
+      );
+    }
+    await db.query(
+      `INSERT INTO booster_rules (venue_id, name, points_per_dollar, days_of_week, start_minute, end_minute, monthly_budget_points, active)
+       VALUES ($1, 'Prime Dinner Booster', 3, '{0,1,2,3,4,5,6}', 1020, 1380, 500000, true)`,
+      [row.id],
+    );
+    await db.query(
+      `INSERT INTO crm_segments (venue_id, name, definition)
+       VALUES ($1, 'High Spenders', '{"all":[{"field":"lifetime_spend_cents","op":"gte","value":50000}]}')`,
+      [row.id],
+    );
   }
 
   const pw = hashPassword('nexora123');
   const pwManager = hashPassword('manager123');
   const pwHost = hashPassword('host123');
   const pwAdmin = hashPassword('admin123');
+  const hudsonId = venueIds[venueIds.length - 1];
   await db.query(
     `INSERT INTO staff_users (venue_id, email, name, role, password_hash) VALUES
      (NULL,'manager@nexora.dev','Priya Menon','MANAGER',$1),
      ($2,'host@nexora.dev','Arjun Rao','HOST',$1),
      (NULL,'admin@nexora.internal','Org Admin','MANAGER',$3),
      ($2,'manager@themill.com','Venue Manager','MANAGER',$4),
-     ($2,'host@themill.com','Lead Host','HOST',$5)`,
-    [pw, venueIds[0], pwAdmin, pwManager, pwHost],
+     ($2,'host@themill.com','Lead Host','HOST',$5),
+     ($6,'manager.nyc@nexora.dev','NYC Manager','MANAGER',$1),
+     ($6,'host.nyc@nexora.dev','NYC Host','HOST',$1)`,
+    [pw, venueIds[0], pwAdmin, pwManager, pwHost, hudsonId],
   );
 
   const guestIds: string[] = [];
